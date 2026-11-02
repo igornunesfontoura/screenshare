@@ -3,6 +3,7 @@
 export type CaptureBackend = "dxgi-wasapi" | "pipewire" | "unsupported";
 
 export interface PlatformInfo {
+  version: string;
   os: string;
   arch: string;
   captureBackend: CaptureBackend;

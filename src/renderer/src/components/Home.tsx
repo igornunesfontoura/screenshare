@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { AlertTriangle, Hourglass, Loader2, LogIn, MonitorUp, UserRound } from "lucide-react";
+import { AlertTriangle, Hourglass, Loader2, LogIn, MonitorUp, Server, UserRound } from "lucide-react";
 import {
   MAX_NAME_LENGTH,
   ROOM_CODE_LENGTH,
@@ -7,12 +7,13 @@ import {
 } from "../../../../shared/protocol.ts";
 import { usePersistentState } from "../hooks/usePersistentState";
 import type { RoomSession } from "../hooks/useRoom";
+import { DEFAULT_SIGNALING_URL, isValidSignalingUrl } from "../lib/signaling";
 
 interface HomeProps {
   session: RoomSession;
   error: string | null;
-  onCreate(name: string): void;
-  onJoin(code: string, name: string): void;
+  onCreate(name: string, serverUrl: string): void;
+  onJoin(code: string, name: string, serverUrl: string): void;
   onCancel(): void;
 }
 
@@ -23,13 +24,19 @@ function randomGuestName(): string {
 export function Home({ session, error, onCreate, onJoin, onCancel }: HomeProps) {
   const [roomCode, setRoomCode] = useState("");
   const [name, setName] = usePersistentState("screenshare:name", randomGuestName);
+  const [serverUrl, setServerUrl] = usePersistentState(
+    "screenshare:server",
+    () => DEFAULT_SIGNALING_URL,
+  );
+  const serverValid = isValidSignalingUrl(serverUrl);
+  const server = serverUrl.trim();
   const connecting = session.status === "connecting";
   const busy = (role: "host" | "viewer") => connecting && session.role === role;
   const displayName = name.trim() || randomGuestName();
 
   function submitJoin(e: FormEvent) {
     e.preventDefault();
-    if (isValidRoomCode(roomCode)) onJoin(roomCode, displayName);
+    if (isValidRoomCode(roomCode) && serverValid) onJoin(roomCode, displayName, server);
   }
 
   if (session.status === "waiting") {
@@ -72,6 +79,30 @@ export function Home({ session, error, onCreate, onJoin, onCancel }: HomeProps) 
         />
       </label>
 
+      <details className="rounded-xl border border-border bg-surface px-4 py-3" open={!serverValid}>
+        <summary className="flex cursor-pointer items-center gap-3 text-sm text-slate-400">
+          <Server className="h-4 w-4" />
+          Servidor de conexão
+          <span className="truncate font-mono text-xs text-slate-500">{server}</span>
+        </summary>
+        <label className="mt-3 block space-y-1.5 text-sm">
+          <span className="text-slate-400">
+            Endereço do servidor de signaling (todos na sala precisam usar o mesmo)
+          </span>
+          <input
+            value={serverUrl}
+            onChange={(e) => setServerUrl(e.currentTarget.value)}
+            spellCheck={false}
+            aria-invalid={!serverValid}
+            placeholder="wss://seu-servidor.exemplo.com"
+            className="w-full rounded-lg border border-border bg-void px-3 py-2 font-mono outline-none select-text focus:border-cyan-400 aria-invalid:border-red-500/60"
+          />
+          {!serverValid && (
+            <span className="text-xs text-red-300">Use um endereço ws:// ou wss://.</span>
+          )}
+        </label>
+      </details>
+
       <div className="grid gap-6 md:grid-cols-2">
         <section className="rounded-xl border border-border bg-surface p-6">
           <MonitorUp className="mb-4 h-8 w-8 text-emerald-400" />
@@ -81,8 +112,8 @@ export function Home({ session, error, onCreate, onJoin, onCancel }: HomeProps) 
           </p>
           <button
             type="button"
-            onClick={() => onCreate(displayName)}
-            disabled={connecting}
+            onClick={() => onCreate(displayName, server)}
+            disabled={connecting || !serverValid}
             className="flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-500 py-2.5 font-medium text-void transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-40"
           >
             {busy("host") && <Loader2 className="h-4 w-4 animate-spin" />}
@@ -109,7 +140,7 @@ export function Home({ session, error, onCreate, onJoin, onCancel }: HomeProps) 
             />
             <button
               type="submit"
-              disabled={connecting || !isValidRoomCode(roomCode)}
+              disabled={connecting || !serverValid || !isValidRoomCode(roomCode)}
               className="flex items-center gap-2 rounded-lg bg-cyan-500 px-4 font-medium text-void transition hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-40"
             >
               {busy("viewer") && <Loader2 className="h-4 w-4 animate-spin" />}

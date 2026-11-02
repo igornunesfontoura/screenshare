@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ClientMessage, PeerId, Role, ServerMessage } from "../../../../shared/protocol.ts";
 import { ChatRateLimiter, appendMessage, cleanChatText, type ChatMessage } from "../lib/chat";
 import { PeerLink, type SendParams } from "../lib/peer";
-import { SIGNALING_URL, SignalingClient } from "../lib/signaling";
+import { SignalingClient } from "../lib/signaling";
 import type { MediaStats } from "../lib/stats";
 
 export interface PeerStatus {
@@ -46,8 +46,8 @@ export interface UseRoom {
   requests: JoinRequest[];
   messages: ChatMessage[];
   error: string | null;
-  createRoom(name: string): Promise<void>;
-  joinRoom(code: string, name: string): Promise<void>;
+  createRoom(name: string, serverUrl: string): Promise<void>;
+  joinRoom(code: string, name: string, serverUrl: string): Promise<void>;
   admit(peerId: PeerId): void;
   reject(peerId: PeerId): void;
   kick(peerId: PeerId): void;
@@ -264,14 +264,14 @@ export function useRoom(outgoing: OutgoingMedia): UseRoom {
   );
 
   const connect = useCallback(
-    async (as: Role, first: ClientMessage) => {
+    async (as: Role, serverUrl: string, first: ClientMessage) => {
       teardown(null);
       const attempt = generation.current;
       const isCurrent = () => attempt === generation.current;
       role.current = as;
       setSession({ status: "connecting", role: as });
       try {
-        const client = await SignalingClient.connect(SIGNALING_URL, {
+        const client = await SignalingClient.connect(serverUrl, {
           onMessage: (message) => {
             if (isCurrent()) handleMessage(message);
           },
@@ -294,11 +294,12 @@ export function useRoom(outgoing: OutgoingMedia): UseRoom {
   );
 
   const createRoom = useCallback(
-    (name: string) => connect("host", { type: "create", name }),
+    (name: string, serverUrl: string) => connect("host", serverUrl, { type: "create", name }),
     [connect],
   );
   const joinRoom = useCallback(
-    (code: string, name: string) => connect("viewer", { type: "join", code, name }),
+    (code: string, name: string, serverUrl: string) =>
+      connect("viewer", serverUrl, { type: "join", code, name }),
     [connect],
   );
 

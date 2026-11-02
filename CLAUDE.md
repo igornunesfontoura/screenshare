@@ -86,6 +86,12 @@ npm run dist:win     # NSIS installer + portable .exe
 * **HW encoding:** H.264 is preferred via `setCodecPreferences`. On Linux, VAAPI encode only kicks in with `--enable-features=AcceleratedVideoEncoder,VaapiVideoEncoder` (set in `src/main/index.ts`); Chromium falls back to software on its own if VAAPI fails.
 * **Testing without consent prompts:** the screen picker is a consent dialog — never automate it. To exercise the WebRTC media path, inject a fake `window.screenshare` + canvas-based `getDisplayMedia` into a browser tab (host) and join from the app.
 
+### Packaging & testing (Phase 5)
+* Linux ships as AppImage only; the `.deb` target is off until the project has a homepage (required package metadata).
+* Windows installers (NSIS/portable) need wine when built on Linux — build them on Windows (CI does) instead of installing wine.
+* `scripts/smoke.mjs` launches a packaged build with `--remote-debugging-port` and checks title, preload bridge, version and first render. CI runs it on Linux (xvfb, AppArmor userns relaxed for the Chromium sandbox) and Windows.
+* The signaling server URL is user-configurable on the Home screen (default from `VITE_SIGNALING_URL` at build time); the server ships as a Docker image (`server/Dockerfile`, build context = repo root) and handles SIGTERM as PID 1.
+
 ### Room flow (Phase 4)
 * Joining puts the viewer in a server-side waiting room (`waiting` → host gets `join-request` → `admit`/`reject`); pending viewers count toward `MAX_VIEWERS` and cannot signal. Hosts can `kick`.
 * Chat rides the `control` DataChannel: viewers send `chat-send`, the host stamps author/time (from server-provided names, so viewers can't spoof) and fans out `chat` to everyone; late joiners receive the history when their channel opens.

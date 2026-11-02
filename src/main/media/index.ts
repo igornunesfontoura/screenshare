@@ -30,6 +30,7 @@ export function registerMediaIpc(): void {
   ipcMain.handle(
     IPC.platformInfo,
     (): PlatformInfo => ({
+      version: app.getVersion(),
       os: process.platform === "win32" ? "windows" : process.platform,
       arch: process.arch,
       captureBackend: captureBackend(),

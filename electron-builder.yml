@@ -7,7 +7,10 @@ files:
   - out/**/*
   - package.json
 linux:
-  target: [AppImage, deb]
+  # deb desligado até o projeto ter uma homepage (metadado obrigatório do pacote).
+  target: [AppImage]
+  # WM_CLASS da janela = nome do .desktop, para o ambiente ligar janela e atalho.
+  syncDesktopName: true
   category: Video
   executableName: screenshare
   icon: build/icon.png

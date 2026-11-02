@@ -55,7 +55,7 @@ function App() {
       </main>
 
       <footer className="border-t border-border px-6 py-3 text-xs text-slate-500">
-        Fase 4 · player, chat e controle da sala — chat de voz numa fase própria
+        {platform ? `ScreenShare v${platform.version}` : "ScreenShare (navegador)"} · P2P via WebRTC
       </footer>
     </div>
   );

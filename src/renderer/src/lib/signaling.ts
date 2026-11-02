@@ -1,7 +1,13 @@
 import type { ClientMessage, ServerMessage } from "../../../../shared/protocol.ts";
 
-export const SIGNALING_URL: string =
+// Padrão do build; o usuário pode trocar na tela inicial.
+export const DEFAULT_SIGNALING_URL: string =
   import.meta.env.VITE_SIGNALING_URL ?? "ws://localhost:8787";
+
+export function isValidSignalingUrl(value: string): boolean {
+  const url = URL.parse(value.trim());
+  return url !== null && (url.protocol === "ws:" || url.protocol === "wss:");
+}
 
 export interface SignalingHandlers {
   onMessage(message: ServerMessage): void;

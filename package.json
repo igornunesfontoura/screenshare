@@ -6,6 +6,7 @@
   "author": "Igor Nunes <igoralunomc@gmail.com>",
   "type": "module",
   "main": "out/main/index.js",
+  "desktopName": "screenshare.desktop",
   "scripts": {
     "dev": "electron-vite dev",
     "build": "npm run typecheck && electron-vite build",
@@ -15,7 +16,8 @@
     "dist:win": "npm run build && electron-builder --win",
     "signal": "npm --prefix server start",
     "test:server": "npm --prefix server test",
-    "test": "node --test shared/*.test.ts && npm --prefix server test"
+    "test": "node --test shared/*.test.ts && npm --prefix server test",
+    "smoke:linux": "node scripts/smoke.mjs release/${npm_package_version}/linux-unpacked/screenshare"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",

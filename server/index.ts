@@ -167,4 +167,12 @@ if (import.meta.main) {
   });
   // Sem a porta (ex.: EADDRINUSE) o processo não serve para nada; sai com erro.
   wss.once("error", () => process.exit(1));
+
+  // Como PID 1 num container o Node não trata SIGTERM sozinho; encerra limpo.
+  const shutdown = () => {
+    for (const client of wss.clients) client.terminate();
+    wss.close(() => process.exit(0));
+  };
+  process.once("SIGTERM", shutdown);
+  process.once("SIGINT", shutdown);
 }
