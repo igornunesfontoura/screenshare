@@ -34,7 +34,7 @@ export function ChatPanel({ messages, selfId, hostId, onSend }: ChatPanelProps) 
   }
 
   return (
-    <section className="flex h-[32rem] flex-col rounded-xl border border-border bg-surface lg:h-full lg:min-h-[28rem]">
+    <section className="flex h-[32rem] min-h-0 flex-col rounded-xl border border-border bg-surface lg:h-auto lg:min-h-[20rem] lg:flex-1">
       <h2 className="flex items-center gap-2 border-b border-border px-4 py-3 font-semibold">
         <MessageSquare className="h-5 w-5 text-cyan-400" />
         Chat

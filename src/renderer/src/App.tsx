@@ -1,16 +1,29 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Cpu, Radio } from "lucide-react";
 import { Home } from "./components/Home";
 import { RoomView } from "./components/RoomView";
 import { useCapture } from "./hooks/useCapture";
+import { usePersistentState } from "./hooks/usePersistentState";
+import { useVoice } from "./hooks/useVoice";
 import { useRoom } from "./hooks/useRoom";
 import { getPlatformInfo, type PlatformInfo } from "./lib/platform";
 
 function App() {
   const [platform, setPlatform] = useState<PlatformInfo | null>(null);
   const capture = useCapture();
-  const room = useRoom(capture.outgoing);
+  const [inRoomFlag, setInRoomFlag] = useState(false);
+  const voice = useVoice(inRoomFlag);
+  const [storedVoiceVolume, setVoiceVolume] = usePersistentState("screenshare:voice-volume", () => 1);
+  const voiceVolume = Number.isFinite(storedVoiceVolume) ? Math.min(1, Math.max(0, storedVoiceVolume)) : 1;
+  const voiceInput = useMemo(
+    () => ({ micTrack: voice.micTrack, volume: voiceVolume }),
+    [voice.micTrack, voiceVolume],
+  );
+  const room = useRoom(capture.outgoing, voiceInput);
   const inRoom = room.session.status === "in-room";
+
+  // O microfone só abre dentro de uma sala.
+  useEffect(() => setInRoomFlag(inRoom), [inRoom]);
   const stopCapture = capture.stop;
 
   // Sala encerrada (por nós, pelo servidor ou por erro) encerra a transmissão.
@@ -42,7 +55,14 @@ function App() {
 
       <main className="flex flex-1 overflow-y-auto p-6">
         {room.session.status === "in-room" ? (
-          <RoomView session={room.session} room={room} capture={capture} />
+          <RoomView
+            session={room.session}
+            room={room}
+            capture={capture}
+            voice={voice}
+            voiceVolume={voiceVolume}
+            onVoiceVolumeChange={setVoiceVolume}
+          />
         ) : (
           <Home
             session={room.session}

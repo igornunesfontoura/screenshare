@@ -29,6 +29,8 @@ export interface PeerLinkEvents {
   onStats(stats: MediaStats): void;
   onRemoteStream(stream: MediaStream): void;
   onRemoteLive(live: boolean): void;
+  // Voz recebida pelo transceiver de voz (host: microfone do viewer; viewer: mixagem do host).
+  onRemoteVoice(track: MediaStreamTrack): void;
   // Host: texto enviado por este viewer. Viewer: mensagem repassada pelo host.
   onChatSend(text: string): void;
   onChat(message: ChatMessage): void;
@@ -58,6 +60,12 @@ export class PeerLink {
   // Viewer: tracks recebidas do host.
   private remoteTracks = new Map<string, MediaStreamTrack>();
 
+  // Voz nos dois sentidos. O host cria este transceiver primeiro (m-line 0) em modo
+  // sendrecv; o viewer o adota na primeira offer. Assim o viewer transmite o microfone
+  // com replaceTrack, sem precisar fazer offer (só o host negocia).
+  private voice: RTCRtpTransceiver | null = null;
+  private voiceTrack: MediaStreamTrack | null = null;
+
   constructor(role: Role, events: PeerLinkEvents) {
     this.role = role;
     this.events = events;
@@ -74,7 +82,19 @@ export class PeerLink {
       if (state === "failed" && role === "host") this.pc.restartIce();
     };
 
+    this.pc.ontrack = ({ track, transceiver }) => {
+      if (transceiver === this.pc.getTransceivers()[0]) {
+        events.onRemoteVoice(track);
+        return;
+      }
+      if (role === "viewer") {
+        this.remoteTracks.set(track.kind, track);
+        events.onRemoteStream(new MediaStream([...this.remoteTracks.values()]));
+      }
+    };
+
     if (role === "host") {
+      this.voice = this.pc.addTransceiver("audio", { direction: "sendrecv" });
       this.pc.onnegotiationneeded = () => {
         this.sendOffer().catch((err: unknown) => console.error("Falha ao criar offer", err));
       };
@@ -82,10 +102,6 @@ export class PeerLink {
     } else {
       this.pc.ondatachannel = ({ channel }) => {
         if (channel.label === "control") this.attachControl(channel);
-      };
-      this.pc.ontrack = ({ track }) => {
-        this.remoteTracks.set(track.kind, track);
-        events.onRemoteStream(new MediaStream([...this.remoteTracks.values()]));
       };
     }
 
@@ -108,6 +124,15 @@ export class PeerLink {
   }
 
   // false quando o canal ainda não abriu (a mensagem não foi enviada).
+  // Host: mixagem para este viewer. Viewer: o próprio microfone (null = silêncio).
+  setVoiceTrack(track: MediaStreamTrack | null): void {
+    this.voiceTrack = track;
+    if (!this.voice) return;
+    this.voice.sender
+      .replaceTrack(track)
+      .catch((err: unknown) => console.error("Falha ao trocar a trilha de voz", err));
+  }
+
   sendChatText(text: string): boolean {
     return this.sendControl({ t: "chat-send", text });
   }
@@ -123,6 +148,7 @@ export class PeerLink {
         if (this.role === "host") return;
         await this.pc.setRemoteDescription({ type: "offer", sdp: payload.sdp });
         await this.flushCandidates();
+        this.adoptVoiceTransceiver();
         const answer = await this.pc.createAnswer();
         // O receptor declara que aceita Opus estéreo em bitrate alto.
         await this.pc.setLocalDescription({ type: "answer", sdp: enableOpusStereo(answer.sdp!) });
@@ -151,6 +177,16 @@ export class PeerLink {
     window.clearInterval(this.statsTimer);
     this.control?.close();
     this.pc.close();
+  }
+
+  private adoptVoiceTransceiver(): void {
+    if (this.voice) return;
+    const [first] = this.pc.getTransceivers();
+    if (first?.receiver.track.kind !== "audio") return;
+    this.voice = first;
+    // Antes da answer: assim ela sai sendrecv e o viewer pode falar depois sem renegociar.
+    first.direction = "sendrecv";
+    if (this.voiceTrack) void first.sender.replaceTrack(this.voiceTrack);
   }
 
   private async applyLocalStream(stream: MediaStream | null, params: SendParams): Promise<void> {

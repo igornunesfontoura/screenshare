@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Check, Copy, LogOut, MonitorPlay, UserX, Users } from "lucide-react";
 import { MAX_VIEWERS, type PeerId } from "../../../../shared/protocol.ts";
 import type { UseCapture } from "../hooks/useCapture";
+import type { UseVoice } from "../hooks/useVoice";
 import type { PeerStatus, RoomSession, UseRoom } from "../hooks/useRoom";
 import { serverLabel } from "../lib/signaling";
 import { ChatPanel } from "./ChatPanel";
@@ -10,14 +11,25 @@ import { JoinRequests } from "./JoinRequests";
 import { Player } from "./Player";
 import { SharePanel } from "./SharePanel";
 import { StatsLine } from "./StatsLine";
+import { VoicePanel } from "./VoicePanel";
 
 interface RoomViewProps {
   session: Extract<RoomSession, { status: "in-room" }>;
   room: UseRoom;
   capture: UseCapture;
+  voice: UseVoice;
+  voiceVolume: number;
+  onVoiceVolumeChange(volume: number): void;
 }
 
-export function RoomView({ session, room, capture }: RoomViewProps) {
+export function RoomView({
+  session,
+  room,
+  capture,
+  voice,
+  voiceVolume,
+  onVoiceVolumeChange,
+}: RoomViewProps) {
   const isHost = session.role === "host";
 
   return (
@@ -39,7 +51,8 @@ export function RoomView({ session, room, capture }: RoomViewProps) {
           <HostStream hostName={session.hostName} status={room.peers[session.hostId]} />
         )}
       </div>
-      <aside className="lg:sticky lg:top-0 lg:h-[calc(100vh-10rem)]">
+      <aside className="flex flex-col gap-4 lg:sticky lg:top-0 lg:h-[calc(100vh-10rem)]">
+        <VoicePanel voice={voice} volume={voiceVolume} onVolumeChange={onVoiceVolumeChange} />
         <ChatPanel
           messages={room.messages}
           selfId={session.selfId}

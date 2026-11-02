@@ -8,10 +8,17 @@ import {
 } from "../../../shared/platform.ts";
 import { listCaptureSources, prepareCapture, registerDisplayMediaHandler } from "./capture.ts";
 import {
+  type OwnAudio,
   startLinuxSystemAudio,
   stopLinuxSystemAudio,
   stopLinuxSystemAudioSync,
 } from "./linux-audio.ts";
+
+// Identifica o áudio do próprio app (PIDs, incluindo o AudioService do Chromium, e
+// o nome), para a captura do sistema não pegar o que o ScreenShare toca (vozes do chat).
+function ownAudio(): OwnAudio {
+  return { pids: new Set(app.getAppMetrics().map((metric) => metric.pid)), appName: app.getName() };
+}
 
 function captureBackend(): CaptureBackend {
   switch (process.platform) {
@@ -41,7 +48,7 @@ export function registerMediaIpc(): void {
 
   // No Windows o áudio vem pelo loopback do getDisplayMedia; só o Linux precisa disto.
   ipcMain.handle(IPC.startSystemAudio, () =>
-    process.platform === "linux" ? startLinuxSystemAudio() : null,
+    process.platform === "linux" ? startLinuxSystemAudio(ownAudio) : null,
   );
   ipcMain.handle(IPC.stopSystemAudio, () => stopLinuxSystemAudio());
 

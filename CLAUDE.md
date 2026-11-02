@@ -136,5 +136,10 @@ When prompting Claude Code to build this project step-by-step, use the following
 5. **Phase 5: Packaging & Testing**
    * Configure electron-builder for Linux AppImage/deb and Windows `.exe`.
 6. **Phase 6: Voice Chat (push-to-talk)**
-   * Blocker to solve first: the host's system-audio capture is the default sink monitor, so viewers' voices played on the host get re-captured and echo back. Needs the app's own playback routed outside the captured sink (PipeWire per-app linking on Linux; `restrictOwnAudio`/process-excluding loopback on Windows).
-   * Topology is a star: the host must mix/forward viewer voices (only the host sends offers, so the viewer voice transceiver must be negotiated by the host up front).
+   * Modes: off / push-to-talk (hold V, window must be focused — Electron's globalShortcut has no key-up) / open mic.
+
+### Voice notes (Phase 6)
+* **Star topology:** each `PeerLink` has a voice transceiver created by the host first (m-line 0, `sendrecv`); viewers adopt `getTransceivers()[0]` on the first offer and set it `sendrecv` before answering, so they can talk via `replaceTrack` without ever offering. `ontrack` on transceiver 0 is voice; everything else is screen media.
+* **Mixing:** `VoiceMixer` (`lib/voice.ts`) plays received voices through `<audio>` elements (also required for remote WebRTC audio to reach WebAudio in Chromium) and, on the host, builds one `MediaStreamDestination` per viewer = host mic + all other viewers, never the viewer's own voice.
+* **No echo of voices through system audio (Linux):** system audio is captured from a null sink `screenshare_capture` that `linux-audio.ts` feeds with `pw-link` links from every `Stream/Output/Audio` node except the app's own (`application.process.id` ∈ `app.getAppMetrics()` pids), re-planned every second via `pw-dump`. Without `pw-link`/`pw-dump` it falls back to the default sink monitor (echo returns). Windows requests `restrictOwnAudio` on the loopback capture — unverified.
+* **Testing voice without real mics:** override `getUserMedia` with an oscillator per participant (distinct frequencies) and check FFT peaks on `getTransceivers()[0].receiver.track`.

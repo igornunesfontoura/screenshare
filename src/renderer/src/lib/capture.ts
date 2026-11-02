@@ -96,7 +96,9 @@ export async function startCapture(
       height: { ideal: height, max: height },
       frameRate: { ideal: settings.fps, max: settings.fps },
     },
-    audio: audioViaDisplayMedia,
+    // Windows (loopback): pede ao Chromium para excluir o áudio do próprio app,
+    // senão as vozes do chat tocadas aqui voltam para os viewers. Ignorado se não suportado.
+    audio: audioViaDisplayMedia ? ({ restrictOwnAudio: true } as MediaTrackConstraints) : false,
   });
   const [video] = stream.getVideoTracks();
   video.contentHint = settings.content;

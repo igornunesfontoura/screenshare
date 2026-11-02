@@ -3,6 +3,7 @@ import type { ClientMessage, PeerId, Role, ServerMessage } from "../../../../sha
 import { ChatRateLimiter, appendMessage, cleanChatText, type ChatMessage } from "../lib/chat";
 import { PeerLink, type SendParams } from "../lib/peer";
 import { SignalingClient } from "../lib/signaling";
+import { VoiceMixer } from "../lib/voice";
 import type { MediaStats } from "../lib/stats";
 
 export interface PeerStatus {
@@ -72,7 +73,13 @@ const REMOVED_REASONS = {
   kicked: "Você foi removido da sala pelo host.",
 } as const;
 
-export function useRoom(outgoing: OutgoingMedia): UseRoom {
+export interface VoiceInput {
+  micTrack: MediaStreamTrack | null;
+  // Volume de reprodução das vozes recebidas (0..1).
+  volume: number;
+}
+
+export function useRoom(outgoing: OutgoingMedia, voice: VoiceInput): UseRoom {
   const [session, setSession] = useState<RoomSession>({ status: "idle" });
   const [peers, setPeers] = useState<Record<PeerId, PeerStatus>>({});
   const [requests, setRequests] = useState<JoinRequest[]>([]);
@@ -97,6 +104,17 @@ export function useRoom(outgoing: OutgoingMedia): UseRoom {
   const generation = useRef(0);
   // Lido por ensureLink para que viewers que entram depois já recebam a transmissão.
   const outgoingRef = useRef(outgoing);
+  const voiceRef = useRef(voice);
+  // Toca as vozes recebidas; no host também monta a mixagem de cada viewer.
+  const mixer = useRef<VoiceMixer | null>(null);
+  const getMixer = useCallback(() => {
+    if (!mixer.current) {
+      mixer.current = new VoiceMixer();
+      mixer.current.setVolume(voiceRef.current.volume);
+      if (role.current === "host") mixer.current.setLocal(voiceRef.current.micTrack);
+    }
+    return mixer.current;
+  }, []);
 
   const send = useCallback((message: ClientMessage) => signaling.current?.send(message), []);
 
@@ -132,6 +150,7 @@ export function useRoom(outgoing: OutgoingMedia): UseRoom {
 
   const dropPeer = useCallback(
     (id: PeerId) => {
+      mixer.current?.removePeer(id);
       links.current.get(id)?.close();
       links.current.delete(id);
       setPeers(({ [id]: _, ...rest }) => rest);
@@ -150,6 +169,8 @@ export function useRoom(outgoing: OutgoingMedia): UseRoom {
     signaling.current = null;
     for (const link of links.current.values()) link.close();
     links.current.clear();
+    mixer.current?.close();
+    mixer.current = null;
     names.current.clear();
     kicked.current.clear();
     admitted.current.clear();
@@ -174,6 +195,7 @@ export function useRoom(outgoing: OutgoingMedia): UseRoom {
         onStats: (stats) => updatePeer(id, { stats }),
         onRemoteStream: (stream) => updatePeer(id, { stream }),
         onRemoteLive: (live) => updatePeer(id, { live }),
+        onRemoteVoice: (track) => getMixer().addRemote(id, track),
         onChatSend: (text) => {
           const name = names.current.get(id);
           if (!name || !chatLimiter.current.allow(id)) return;
@@ -188,12 +210,16 @@ export function useRoom(outgoing: OutgoingMedia): UseRoom {
       });
       links.current.set(id, link);
       updatePeer(id, { state: "new", name: names.current.get(id) ?? "" });
+      // Host envia a este viewer a mixagem (sem a voz dele); viewer envia o microfone.
+      link.setVoiceTrack(
+        role.current === "host" ? getMixer().outputFor(id) : voiceRef.current.micTrack,
+      );
       if (role.current === "host" && outgoingRef.current.stream) {
         void link.setLocalStream(outgoingRef.current.stream, outgoingRef.current.params);
       }
       return link;
     },
-    [broadcastChat, send, updatePeer],
+    [broadcastChat, getMixer, send, updatePeer],
   );
 
   const handleMessage = useCallback(
@@ -359,6 +385,20 @@ export function useRoom(outgoing: OutgoingMedia): UseRoom {
     if (role.current !== "host") return;
     for (const link of links.current.values()) void link.setLocalStream(outgoing.stream, outgoing.params);
   }, [outgoing]);
+
+  useEffect(() => {
+    voiceRef.current = voice;
+    mixer.current?.setVolume(voice.volume);
+  }, [voice]);
+
+  // Microfone ligado/desligado: o host troca a entrada da mixagem; o viewer, a trilha enviada.
+  useEffect(() => {
+    if (role.current === "host") {
+      if (voice.micTrack || mixer.current) getMixer().setLocal(voice.micTrack);
+      return;
+    }
+    for (const link of links.current.values()) link.setVoiceTrack(voice.micTrack);
+  }, [voice.micTrack, getMixer]);
 
   useEffect(() => () => teardown(null), [teardown]);
 

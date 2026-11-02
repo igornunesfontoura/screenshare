@@ -16,7 +16,7 @@
     "dist:win": "npm run build && electron-builder --win",
     "signal": "npm --prefix server start",
     "test:server": "npm --prefix server test",
-    "test": "node --test shared/*.test.ts && npm --prefix server test",
+    "test": "node --test shared/*.test.ts src/main/**/*.test.ts && npm --prefix server test",
     "smoke:linux": "node scripts/smoke.mjs release/${npm_package_version}/linux-unpacked/screenshare"
   },
   "devDependencies": {
