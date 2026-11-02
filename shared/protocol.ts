@@ -9,6 +9,9 @@ export const MAX_VIEWERS = 8;
 // Fila de espera separada: lotar a fila não pode bloquear a sala inteira.
 export const MAX_PENDING = 4;
 export const MAX_NAME_LENGTH = 32;
+// O cliente manda "ping" nesse intervalo: proxies (Cloudflare) derrubam WebSocket
+// ocioso e o servidor no Workers não consegue mandar ping de protocolo.
+export const KEEPALIVE_MS = 30_000;
 
 export type SignalPayload =
   | { kind: "offer"; sdp: string }
@@ -23,7 +26,8 @@ export type ClientMessage =
   | { type: "reject"; peerId: PeerId }
   | { type: "kick"; peerId: PeerId }
   | { type: "signal"; to: PeerId; payload: SignalPayload }
-  | { type: "leave" };
+  | { type: "leave" }
+  | { type: "ping" };
 
 export type ServerMessage =
   | { type: "created"; code: string; peerId: PeerId; name: string }

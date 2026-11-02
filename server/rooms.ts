@@ -1,4 +1,3 @@
-import { randomInt, randomUUID } from "node:crypto";
 import {
   MAX_PENDING,
   MAX_VIEWERS,
@@ -51,7 +50,7 @@ export class RoomRegistry {
   private roomOf = new Map<PeerId, Room>();
 
   static newPeerId(): PeerId {
-    return randomUUID();
+    return crypto.randomUUID();
   }
 
   get size(): number {
@@ -197,9 +196,19 @@ export class RoomRegistry {
   private uniqueCode(): string {
     const max = 10 ** ROOM_CODE_LENGTH;
     for (let attempt = 0; attempt < 100; attempt++) {
-      const code = randomInt(0, max).toString().padStart(ROOM_CODE_LENGTH, "0");
+      const code = randomBelow(max).toString().padStart(ROOM_CODE_LENGTH, "0");
       if (!this.rooms.has(code)) return code;
     }
     throw new RoomError("server-full", "Servidor sem códigos livres. Tente mais tarde.");
   }
+}
+
+// Web Crypto (não node:crypto) para rodar igual no Node e no Cloudflare Workers.
+// Descarta o topo do intervalo de 32 bits para não enviesar o resto da divisão.
+function randomBelow(max: number): number {
+  const limit = Math.floor(2 ** 32 / max) * max;
+  const buffer = new Uint32Array(1);
+  do crypto.getRandomValues(buffer);
+  while (buffer[0] >= limit);
+  return buffer[0] % max;
 }

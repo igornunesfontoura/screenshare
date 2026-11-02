@@ -23,5 +23,9 @@
     "src/preload",
     "shared/platform.ts",
     "shared/*.test.ts"
+  ],
+  // Depende de protocol.ts (tipos do DOM); é checado pelo tsconfig do servidor.
+  "exclude": [
+    "shared/invite.test.ts"
   ]
 }

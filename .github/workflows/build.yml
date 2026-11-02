@@ -22,6 +22,8 @@ jobs:
       - run: npm run typecheck
       - run: npm --prefix server run typecheck
       - run: npm test
+      # Mesmos testes do signaling contra o worker.ts rodando no wrangler dev.
+      - run: npm --prefix server run test:worker
 
   package:
     needs: test

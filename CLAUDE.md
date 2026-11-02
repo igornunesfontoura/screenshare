@@ -92,6 +92,12 @@ npm run dist:win     # NSIS installer + portable .exe
 * `scripts/smoke.mjs` launches a packaged build with `--remote-debugging-port` and checks title, preload bridge, version and first render. CI runs it on Linux (xvfb, AppArmor userns relaxed for the Chromium sandbox) and Windows.
 * The signaling server URL is user-configurable on the Home screen (default from `VITE_SIGNALING_URL` at build time); the server ships as a Docker image (`server/Dockerfile`, build context = repo root) and handles SIGTERM as PID 1.
 
+### Hosted signaling & invites
+* Release builds point to the Cloudflare Workers deployment (`server/worker.ts`, `server/wrangler.jsonc`, URL in `.env.production`). One Durable Object (`idFromName("global")`) holds every room in memory — no hibernation API, so state lives while sockets are open and the object is evicted (no quota used) when idle. Free plan requires `new_sqlite_classes`.
+* Message handling is transport-agnostic in `server/handler.ts`, shared by the Node server and the worker; `rooms.ts` uses Web Crypto (not `node:crypto`) so it runs on both. `npm --prefix server run test:worker` runs the same tests against `wrangler dev`.
+* Workers can't send protocol pings, so the client sends `{type:"ping"}` every `KEEPALIVE_MS`; the worker closes sockets silent for 2.5× that.
+* Invite link = `https://<server>/j/<code>` (`shared/invite.ts`); the Home code field accepts it, the worker serves a small page at that path. Only a server override is persisted (`screenshare:server-override`, null = build default).
+
 ### Room flow (Phase 4)
 * Joining puts the viewer in a server-side waiting room (`waiting` → host gets `join-request` → `admit`/`reject`); pending viewers count toward `MAX_VIEWERS` and cannot signal. Hosts can `kick`.
 * Chat rides the `control` DataChannel: viewers send `chat-send`, the host stamps author/time (from server-provided names, so viewers can't spoof) and fans out `chat` to everyone; late joiners receive the history when their channel opens.

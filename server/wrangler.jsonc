@@ -1,0 +1,13 @@
+{
+  // Servidor de signaling no Cloudflare Workers (deploy: npm run deploy).
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "screenshare-signal",
+  "main": "worker.ts",
+  "compatibility_date": "2026-10-01",
+  "durable_objects": {
+    "bindings": [{ "name": "HUB", "class_name": "SignalingHub" }]
+  },
+  // Durable Objects com SQLite são os que o plano grátis permite.
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["SignalingHub"] }],
+  "observability": { "enabled": true }
+}

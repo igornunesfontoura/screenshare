@@ -33,7 +33,22 @@ O CI (`.github/workflows/build.yml`) roda typecheck e testes, empacota no Linux 
 
 ## Servidor de signaling
 
-O servidor só troca as mensagens de conexão; vídeo e áudio vão direto entre os participantes. Para usar fora da rede local, publique o servidor e configure o endereço em **Servidor de conexão** na tela inicial do app (todos na sala precisam usar o mesmo).
+O servidor só troca as mensagens de conexão; vídeo e áudio vão direto entre os participantes. Os builds de release apontam para o servidor publicado no Cloudflare Workers (`.env.production`), então basta o código da sala. Na sala, **Copiar convite** gera um link (`https://<servidor>/j/<código>`) que leva servidor e código juntos: quem recebe cola o link no campo do código e o app preenche tudo.
+
+### Cloudflare Workers (padrão)
+
+`server/worker.ts` roda o mesmo protocolo num Durable Object (plano grátis basta):
+
+```bash
+cd server
+npx wrangler login   # uma vez
+npm run deploy       # publica em wss://screenshare-signal.<sua-conta>.workers.dev
+npm run test:worker  # testes do servidor contra o wrangler dev
+```
+
+### Node / Docker (auto-hospedado)
+
+Configure o endereço em **Servidor de conexão** na tela inicial (todos na sala precisam usar o mesmo) ou distribua um convite.
 
 ```bash
 docker build -f server/Dockerfile -t screenshare-signaling .

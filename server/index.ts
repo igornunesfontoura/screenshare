@@ -1,18 +1,13 @@
-import type { IncomingMessage } from "node:http";
+import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import { WebSocketServer, type WebSocket } from "ws";
-import {
-  isValidRoomCode,
-  sanitizeName,
-  type ClientMessage,
-  type ServerMessage,
-  type SignalPayload,
-} from "../shared/protocol.ts";
+import type { ServerMessage } from "../shared/protocol.ts";
+import { MAX_MESSAGE_BYTES, receive } from "./handler.ts";
+import { httpPage } from "./http-page.ts";
 import { JoinRateLimiter } from "./rate-limit.ts";
-import { RoomError, RoomRegistry, type Peer } from "./rooms.ts";
+import { RoomRegistry, type Peer } from "./rooms.ts";
 
 const HEARTBEAT_MS = 30_000;
-const MAX_MESSAGE_BYTES = 64 * 1024;
 
 export interface SignalingOptions {
   // Atrás de proxy (Render, Fly.io) o IP real vem em X-Forwarded-For.
@@ -24,7 +19,14 @@ export interface SignalingOptions {
 export function startSignalingServer(port: number, options: SignalingOptions = {}): WebSocketServer {
   const registry = new RoomRegistry(options.pendingTimeoutMs);
   const joinLimiter = new JoinRateLimiter(options.joinsPerMinute);
-  const wss = new WebSocketServer({ port, maxPayload: MAX_MESSAGE_BYTES });
+  // HTTP próprio para responder ao link de convite aberto no navegador.
+  const http = createServer((req, res) => {
+    const page = httpPage(`http://${req.headers.host ?? "localhost"}${req.url ?? "/"}`);
+    res.writeHead(200, { "content-type": page.type }).end(page.body);
+  });
+  const wss = new WebSocketServer({ server: http, maxPayload: MAX_MESSAGE_BYTES });
+  wss.on("close", () => http.close());
+  http.listen(port);
   const alive = new WeakMap<WebSocket, boolean>();
 
   wss.on("error", (err) => console.error("Erro no servidor de signaling:", err));
@@ -44,25 +46,7 @@ export function startSignalingServer(port: number, options: SignalingOptions = {
     ws.on("error", () => ws.terminate());
 
     ws.on("message", (raw) => {
-      let message: ClientMessage;
-      try {
-        message = JSON.parse(raw.toString());
-      } catch {
-        peer.send({ type: "error", code: "bad-message", message: "JSON inválido." });
-        return;
-      }
-
-      try {
-        handle(registry, peer, message, () => joinLimiter.allow(ip));
-      } catch (err) {
-        if (err instanceof RoomError) {
-          peer.send({ type: "error", code: err.code, message: err.message });
-          return;
-        }
-        // Um bug aqui não pode derrubar todas as salas.
-        console.error("Erro inesperado ao tratar mensagem:", err);
-        peer.send({ type: "error", code: "bad-message", message: "Mensagem não processada." });
-      }
+      receive(registry, peer, raw.toString(), () => joinLimiter.allow(ip));
     });
 
     ws.on("close", () => registry.leave(peer));
@@ -83,72 +67,6 @@ export function startSignalingServer(port: number, options: SignalingOptions = {
   wss.on("close", () => clearInterval(heartbeat));
 
   return wss;
-}
-
-function handle(
-  registry: RoomRegistry,
-  peer: Peer,
-  message: ClientMessage,
-  allowJoin: () => boolean,
-): void {
-  switch (message?.type) {
-    case "create": {
-      const name = sanitizeName(message.name);
-      const code = registry.create(peer, name);
-      peer.send({ type: "created", code, peerId: peer.id, name });
-      return;
-    }
-    case "join": {
-      if (typeof message.code !== "string" || !isValidRoomCode(message.code)) {
-        throw new RoomError("bad-message", "Código de sala inválido.");
-      }
-      // Limita tentativas para dificultar varrer os 10^6 códigos possíveis.
-      if (!allowJoin()) {
-        throw new RoomError("rate-limited", "Muitas tentativas. Aguarde um minuto.");
-      }
-      registry.requestJoin(message.code, peer, sanitizeName(message.name));
-      return;
-    }
-    case "admit":
-    case "reject":
-    case "kick": {
-      if (typeof message.peerId !== "string") {
-        throw new RoomError("bad-message", "Peer inválido.");
-      }
-      registry[message.type](peer, message.peerId);
-      return;
-    }
-    case "signal": {
-      if (typeof message.to !== "string" || !isSignalPayload(message.payload)) {
-        throw new RoomError("bad-message", "Mensagem de sinalização inválida.");
-      }
-      // Só o host faz offers; aceitar de viewers causaria colisão de negociação.
-      if (message.payload.kind === "offer" && !registry.isHost(peer)) {
-        throw new RoomError("bad-message", "Apenas o host pode enviar offers.");
-      }
-      registry.relay(peer, message.to, { type: "signal", from: peer.id, payload: message.payload });
-      return;
-    }
-    case "leave":
-      registry.leave(peer);
-      return;
-    default:
-      throw new RoomError("bad-message", "Tipo de mensagem desconhecido.");
-  }
-}
-
-function isSignalPayload(value: unknown): value is SignalPayload {
-  if (typeof value !== "object" || value === null) return false;
-  const payload = value as Record<string, unknown>;
-  switch (payload.kind) {
-    case "offer":
-    case "answer":
-      return typeof payload.sdp === "string";
-    case "candidate":
-      return typeof payload.candidate === "object" && payload.candidate !== null;
-    default:
-      return false;
-  }
 }
 
 function clientIp(req: IncomingMessage, trustProxy: boolean): string {

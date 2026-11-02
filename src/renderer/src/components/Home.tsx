@@ -1,13 +1,14 @@
 import { useState, type FormEvent } from "react";
-import { AlertTriangle, Hourglass, Loader2, LogIn, MonitorUp, Server, UserRound } from "lucide-react";
+import { AlertTriangle, Hourglass, Loader2, LogIn, MonitorUp, Server, UserRound, X } from "lucide-react";
 import {
   MAX_NAME_LENGTH,
   ROOM_CODE_LENGTH,
   isValidRoomCode,
 } from "../../../../shared/protocol.ts";
+import { parseInvite } from "../../../../shared/invite.ts";
 import { usePersistentState } from "../hooks/usePersistentState";
 import type { RoomSession } from "../hooks/useRoom";
-import { DEFAULT_SIGNALING_URL, isValidSignalingUrl } from "../lib/signaling";
+import { DEFAULT_SIGNALING_URL, isValidSignalingUrl, serverLabel } from "../lib/signaling";
 
 interface HomeProps {
   session: RoomSession;
@@ -23,23 +24,51 @@ function randomGuestName(): string {
 
 export function Home({ session, error, onCreate, onJoin, onCancel }: HomeProps) {
   const [roomCode, setRoomCode] = useState("");
+  // Servidor vindo de um convite colado: vale só para esta entrada e nunca é salvo,
+  // senão um link qualquer trocaria de vez o servidor usado (inclusive ao criar sala).
+  const [inviteServer, setInviteServer] = useState<string | null>(null);
+  const [inviteInvalid, setInviteInvalid] = useState(false);
   const [storedName, setName] = usePersistentState("screenshare:name", randomGuestName);
-  const [storedServer, setServerUrl] = usePersistentState(
-    "screenshare:server",
-    () => DEFAULT_SIGNALING_URL,
+  // Só guarda o servidor quando difere do padrão (null = padrão): assim um build com
+  // outro servidor padrão vale para quem nunca mexeu no campo. A chave antiga
+  // ("screenshare:server") guardava sempre e prendia gente a túneis já desligados.
+  const [storedServer, setStoredServer] = usePersistentState<string | null>(
+    "screenshare:server-override",
+    () => null,
   );
   // Valores salvos podem estar corrompidos (não-string); caem para o padrão.
   const name = typeof storedName === "string" ? storedName : "";
   const serverUrl = typeof storedServer === "string" ? storedServer : DEFAULT_SIGNALING_URL;
+  const setServerUrl = (value: string) =>
+    setStoredServer(value.trim() === DEFAULT_SIGNALING_URL ? null : value);
   const serverValid = isValidSignalingUrl(serverUrl);
   const server = serverUrl.trim();
   const connecting = session.status === "connecting";
   const busy = (role: "host" | "viewer") => connecting && session.role === role;
   const displayName = name.trim() || randomGuestName();
 
+  const joinServer = inviteServer ?? server;
+  const joinServerValid = inviteServer !== null || serverValid;
+
+  // O campo do código também aceita o link de convite (servidor + código).
+  function changeRoomCode(value: string) {
+    const invite = parseInvite(value);
+    if (invite) {
+      const valid = isValidSignalingUrl(invite.serverUrl);
+      setInviteInvalid(!valid);
+      setInviteServer(valid && invite.serverUrl !== server ? invite.serverUrl : null);
+      setRoomCode(valid ? invite.code : "");
+      return;
+    }
+    const digits = value.replace(/\D/g, "").slice(0, ROOM_CODE_LENGTH);
+    setInviteInvalid(false);
+    if (!digits) setInviteServer(null);
+    setRoomCode(digits);
+  }
+
   function submitJoin(e: FormEvent) {
     e.preventDefault();
-    if (isValidRoomCode(roomCode) && serverValid) onJoin(roomCode, displayName, server);
+    if (isValidRoomCode(roomCode) && joinServerValid) onJoin(roomCode, displayName, joinServer);
   }
 
   if (session.status === "waiting") {
@@ -130,28 +159,46 @@ export function Home({ session, error, onCreate, onJoin, onCancel }: HomeProps) 
           <LogIn className="mb-4 h-8 w-8 text-cyan-400" />
           <h2 className="mb-1 text-xl font-semibold">Assistir</h2>
           <p className="mb-6 text-sm text-slate-400">
-            Entre em uma sala com o código de {ROOM_CODE_LENGTH} dígitos.
+            Cole o link de convite ou digite o código de {ROOM_CODE_LENGTH} dígitos.
           </p>
           <form onSubmit={submitJoin} className="flex gap-2">
             <input
               value={roomCode}
-              onChange={(e) =>
-                setRoomCode(e.currentTarget.value.replace(/\D/g, "").slice(0, ROOM_CODE_LENGTH))
-              }
-              inputMode="numeric"
+              onChange={(e) => changeRoomCode(e.currentTarget.value)}
               placeholder="000000"
-              aria-label="Código da sala"
+              aria-label="Código da sala ou link de convite"
               className="w-full rounded-lg border border-border bg-void px-3 py-2.5 text-center font-mono tracking-[0.4em] outline-none select-text focus:border-cyan-400"
             />
             <button
               type="submit"
-              disabled={connecting || !serverValid || !isValidRoomCode(roomCode)}
+              disabled={connecting || !joinServerValid || !isValidRoomCode(roomCode)}
               className="flex items-center gap-2 rounded-lg bg-cyan-500 px-4 font-medium text-void transition hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-40"
             >
               {busy("viewer") && <Loader2 className="h-4 w-4 animate-spin" />}
               Entrar
             </button>
           </form>
+          {inviteServer && (
+            <p className="mt-2 flex items-center gap-2 text-xs text-slate-400">
+              <span className="min-w-0 truncate">
+                Convite via <span className="font-mono text-slate-200">{serverLabel(inviteServer)}</span>
+              </span>
+              <button
+                type="button"
+                onClick={() => setInviteServer(null)}
+                aria-label="Usar meu servidor"
+                title="Usar meu servidor"
+                className="rounded p-0.5 text-slate-500 transition hover:text-slate-200"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </p>
+          )}
+          {inviteInvalid && (
+            <p className="mt-2 text-xs text-red-300">
+              Convite inválido: o servidor precisa usar https (ou ser localhost).
+            </p>
+          )}
         </section>
       </div>
     </div>

@@ -10,14 +10,19 @@
     "start": "node index.ts",
     "dev": "node --watch index.ts",
     "test": "node --test",
-    "typecheck": "tsc"
+    "test:worker": "SIGNALING_TEST_TARGET=worker node --test index.test.ts",
+    "typecheck": "tsc && tsc -p tsconfig.worker.json",
+    "worker:dev": "wrangler dev",
+    "deploy": "wrangler deploy"
   },
   "dependencies": {
     "ws": "^8"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261102.1",
     "@types/node": "^26.6.6",
     "@types/ws": "^8",
-    "typescript": "~6.0.3"
+    "typescript": "~6.0.3",
+    "wrangler": "^4.156.2"
   }
 }

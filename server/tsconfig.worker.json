@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2024"],
+    "types": ["@cloudflare/workers-types"]
+  },
+  "exclude": [],
+  "include": ["worker.ts", "worker-dom.d.ts", "http-page.ts", "../shared/protocol.ts", "../shared/invite.ts"]
+}

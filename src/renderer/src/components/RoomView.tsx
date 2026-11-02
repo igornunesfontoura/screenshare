@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { Check, Copy, LogOut, MonitorPlay, UserX, Users } from "lucide-react";
+import { Check, Copy, Link, LogOut, MonitorPlay, UserX, Users } from "lucide-react";
+import { inviteLink } from "../../../../shared/invite.ts";
 import { MAX_VIEWERS, type PeerId } from "../../../../shared/protocol.ts";
 import type { UseCapture } from "../hooks/useCapture";
 import type { UseVoice } from "../hooks/useVoice";
@@ -37,7 +38,7 @@ export function RoomView({
       <div className="min-w-0 space-y-6">
         <RoomHeader
           code={session.code}
-          server={serverLabel(session.server)}
+          serverUrl={session.server}
           isHost={isHost}
           onLeave={room.leave}
         />
@@ -66,23 +67,24 @@ export function RoomView({
 
 interface RoomHeaderProps {
   code: string;
-  server: string;
+  serverUrl: string;
   isHost: boolean;
   onLeave(): void;
 }
 
-function RoomHeader({ code, server, isHost, onLeave }: RoomHeaderProps) {
-  const [copied, setCopied] = useState(false);
+function RoomHeader({ code, serverUrl, isHost, onLeave }: RoomHeaderProps) {
+  const [copied, setCopied] = useState<"code" | "invite" | null>(null);
+  const invite = inviteLink(serverUrl, code);
 
-  async function copyCode() {
+  async function copy(what: "code" | "invite", text: string) {
     try {
-      await navigator.clipboard.writeText(code);
+      await navigator.clipboard.writeText(text);
     } catch (err) {
-      console.warn("Falha ao copiar o código", err);
+      console.warn("Falha ao copiar", err);
       return;
     }
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 1500);
+    setCopied(what);
+    window.setTimeout(() => setCopied(null), 1500);
   }
 
   return (
@@ -97,23 +99,40 @@ function RoomHeader({ code, server, isHost, onLeave }: RoomHeaderProps) {
           </span>
           <button
             type="button"
-            onClick={copyCode}
+            onClick={() => copy("code", code)}
             aria-label="Copiar código"
             className="rounded-lg p-2 text-slate-400 transition hover:bg-border hover:text-slate-200"
           >
-            {copied ? <Check className="h-5 w-5 text-emerald-400" /> : <Copy className="h-5 w-5" />}
+            {copied === "code" ? (
+              <Check className="h-5 w-5 text-emerald-400" />
+            ) : (
+              <Copy className="h-5 w-5" />
+            )}
           </button>
         </div>
-        <p className="mt-1 font-mono text-xs text-slate-500">via {server}</p>
+        <p className="mt-1 font-mono text-xs text-slate-500">via {serverLabel(serverUrl)}</p>
       </div>
-      <button
-        type="button"
-        onClick={onLeave}
-        className="flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm text-slate-300 transition hover:border-red-500/50 hover:text-red-300"
-      >
-        <LogOut className="h-4 w-4" />
-        {isHost ? "Encerrar sala" : "Sair"}
-      </button>
+      <div className="flex flex-wrap gap-2">
+        {invite && (
+          <button
+            type="button"
+            onClick={() => copy("invite", invite)}
+            title={invite}
+            className="flex items-center gap-2 rounded-lg border border-emerald-500/40 px-4 py-2 text-sm text-emerald-300 transition hover:bg-emerald-500/10"
+          >
+            {copied === "invite" ? <Check className="h-4 w-4" /> : <Link className="h-4 w-4" />}
+            {copied === "invite" ? "Convite copiado" : "Copiar convite"}
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={onLeave}
+          className="flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm text-slate-300 transition hover:border-red-500/50 hover:text-red-300"
+        >
+          <LogOut className="h-4 w-4" />
+          {isHost ? "Encerrar sala" : "Sair"}
+        </button>
+      </div>
     </section>
   );
 }

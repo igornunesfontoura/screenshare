@@ -1,4 +1,8 @@
-import type { ClientMessage, ServerMessage } from "../../../../shared/protocol.ts";
+import {
+  KEEPALIVE_MS,
+  type ClientMessage,
+  type ServerMessage,
+} from "../../../../shared/protocol.ts";
 
 // Padrão do build; o usuário pode trocar na tela inicial.
 export const DEFAULT_SIGNALING_URL: string =
@@ -28,6 +32,8 @@ export interface SignalingHandlers {
 export class SignalingClient {
   private readonly ws: WebSocket;
   private closedByUs = false;
+  // Durante um filme o canal fica ocioso por horas; sem isso o proxy o derruba.
+  private readonly keepalive = window.setInterval(() => this.send({ type: "ping" }), KEEPALIVE_MS);
 
   private constructor(ws: WebSocket, handlers: SignalingHandlers) {
     this.ws = ws;
@@ -35,6 +41,7 @@ export class SignalingClient {
       handlers.onMessage(JSON.parse(event.data as string) as ServerMessage);
     };
     ws.onclose = () => {
+      window.clearInterval(this.keepalive);
       if (!this.closedByUs) handlers.onClose();
     };
   }
@@ -53,6 +60,7 @@ export class SignalingClient {
 
   close(): void {
     this.closedByUs = true;
+    window.clearInterval(this.keepalive);
     this.send({ type: "leave" });
     this.ws.close();
   }
