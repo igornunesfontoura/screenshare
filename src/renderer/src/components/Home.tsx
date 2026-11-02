@@ -23,11 +23,14 @@ function randomGuestName(): string {
 
 export function Home({ session, error, onCreate, onJoin, onCancel }: HomeProps) {
   const [roomCode, setRoomCode] = useState("");
-  const [name, setName] = usePersistentState("screenshare:name", randomGuestName);
-  const [serverUrl, setServerUrl] = usePersistentState(
+  const [storedName, setName] = usePersistentState("screenshare:name", randomGuestName);
+  const [storedServer, setServerUrl] = usePersistentState(
     "screenshare:server",
     () => DEFAULT_SIGNALING_URL,
   );
+  // Valores salvos podem estar corrompidos (não-string); caem para o padrão.
+  const name = typeof storedName === "string" ? storedName : "";
+  const serverUrl = typeof storedServer === "string" ? storedServer : DEFAULT_SIGNALING_URL;
   const serverValid = isValidSignalingUrl(serverUrl);
   const server = serverUrl.trim();
   const connecting = session.status === "connecting";
@@ -98,7 +101,9 @@ export function Home({ session, error, onCreate, onJoin, onCancel }: HomeProps) 
             className="w-full rounded-lg border border-border bg-void px-3 py-2 font-mono outline-none select-text focus:border-cyan-400 aria-invalid:border-red-500/60"
           />
           {!serverValid && (
-            <span className="text-xs text-red-300">Use um endereço ws:// ou wss://.</span>
+            <span className="text-xs text-red-300">
+              Use wss:// (ws:// só para localhost).
+            </span>
           )}
         </label>
       </details>

@@ -18,8 +18,24 @@ const app = spawn(executable, [`--remote-debugging-port=${PORT}`], { stdio: "ign
 const deadline = Date.now() + TIMEOUT_MS;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// Executável ausente ou app que fecha sozinho: falha na hora, sem esperar o prazo.
+const appFailed = new Promise((_, reject) => {
+  app.once("error", (err) => reject(new Error(`Não foi possível abrir o app: ${err.message}`)));
+  app.once("exit", (code) => reject(new Error(`O app fechou antes do fim do teste (código ${code}).`)));
+});
+appFailed.catch(() => undefined);
+
+function withDeadline(promise, what) {
+  const remaining = Math.max(0, deadline - Date.now());
+  const timeout = sleep(remaining).then(() => {
+    throw new Error(`Tempo esgotado: ${what}`);
+  });
+  return Promise.race([promise, appFailed, timeout]);
+}
+
 async function findPage() {
   while (Date.now() < deadline) {
+    if (app.exitCode !== null || app.killed) break;
     try {
       const targets = await (await fetch(`http://127.0.0.1:${PORT}/json`)).json();
       const page = targets.find((t) => t.type === "page");
@@ -32,15 +48,20 @@ async function findPage() {
   throw new Error("O app não abriu nenhuma janela a tempo.");
 }
 
+let nextId = 1;
+
 function evaluate(ws, expression) {
-  return new Promise((resolve, reject) => {
-    const id = Math.floor(Math.random() * 1e9);
+  const call = new Promise((resolve, reject) => {
+    const id = nextId++;
+    ws.addEventListener("close", () => reject(new Error("Conexão de depuração fechada.")), { once: true });
     ws.addEventListener("message", function onMessage(event) {
       const message = JSON.parse(event.data);
       if (message.id !== id) return;
       ws.removeEventListener("message", onMessage);
-      if (message.result?.exceptionDetails) reject(new Error(message.result.exceptionDetails.text));
-      else resolve(message.result?.result?.value);
+      if (message.error) reject(new Error(`CDP: ${message.error.message}`));
+      else if (message.result?.exceptionDetails) {
+        reject(new Error(message.result.exceptionDetails.text));
+      } else resolve(message.result?.result?.value);
     });
     ws.send(
       JSON.stringify({
@@ -50,6 +71,7 @@ function evaluate(ws, expression) {
       }),
     );
   });
+  return withDeadline(call, expression);
 }
 
 async function waitFor(ws, expression) {
@@ -63,12 +85,15 @@ async function waitFor(ws, expression) {
 
 let exitCode = 0;
 try {
-  const page = await findPage();
+  const page = await withDeadline(findPage(), "janela do app");
   const ws = new WebSocket(page.webSocketDebuggerUrl);
-  await new Promise((resolve, reject) => {
-    ws.addEventListener("open", resolve, { once: true });
-    ws.addEventListener("error", reject, { once: true });
-  });
+  await withDeadline(
+    new Promise((resolve, reject) => {
+      ws.addEventListener("open", resolve, { once: true });
+      ws.addEventListener("error", () => reject(new Error("Falha ao conectar no CDP.")), { once: true });
+    }),
+    "conexão de depuração",
+  );
 
   const title = await waitFor(ws, "document.readyState === 'complete' && document.title");
   const info = JSON.parse(await evaluate(ws, "window.screenshare.platformInfo().then(JSON.stringify)"));

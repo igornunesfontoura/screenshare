@@ -3,6 +3,7 @@ import { Check, Copy, LogOut, MonitorPlay, UserX, Users } from "lucide-react";
 import { MAX_VIEWERS, type PeerId } from "../../../../shared/protocol.ts";
 import type { UseCapture } from "../hooks/useCapture";
 import type { PeerStatus, RoomSession, UseRoom } from "../hooks/useRoom";
+import { serverLabel } from "../lib/signaling";
 import { ChatPanel } from "./ChatPanel";
 import { ConnectionBadge } from "./ConnectionBadge";
 import { JoinRequests } from "./JoinRequests";
@@ -22,7 +23,12 @@ export function RoomView({ session, room, capture }: RoomViewProps) {
   return (
     <div className="m-auto grid w-full max-w-7xl gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
       <div className="min-w-0 space-y-6">
-        <RoomHeader code={session.code} isHost={isHost} onLeave={room.leave} />
+        <RoomHeader
+          code={session.code}
+          server={serverLabel(session.server)}
+          isHost={isHost}
+          onLeave={room.leave}
+        />
         {isHost ? (
           <>
             <JoinRequests requests={room.requests} onAdmit={room.admit} onReject={room.reject} />
@@ -45,7 +51,14 @@ export function RoomView({ session, room, capture }: RoomViewProps) {
   );
 }
 
-function RoomHeader({ code, isHost, onLeave }: { code: string; isHost: boolean; onLeave(): void }) {
+interface RoomHeaderProps {
+  code: string;
+  server: string;
+  isHost: boolean;
+  onLeave(): void;
+}
+
+function RoomHeader({ code, server, isHost, onLeave }: RoomHeaderProps) {
   const [copied, setCopied] = useState(false);
 
   async function copyCode() {
@@ -73,6 +86,7 @@ function RoomHeader({ code, isHost, onLeave }: { code: string; isHost: boolean; 
             {copied ? <Check className="h-5 w-5 text-emerald-400" /> : <Copy className="h-5 w-5" />}
           </button>
         </div>
+        <p className="mt-1 font-mono text-xs text-slate-500">via {server}</p>
       </div>
       <button
         type="button"

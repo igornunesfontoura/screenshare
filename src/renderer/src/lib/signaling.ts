@@ -4,9 +4,19 @@ import type { ClientMessage, ServerMessage } from "../../../../shared/protocol.t
 export const DEFAULT_SIGNALING_URL: string =
   import.meta.env.VITE_SIGNALING_URL ?? "ws://localhost:8787";
 
-export function isValidSignalingUrl(value: string): boolean {
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+// wss:// sempre; ws:// sem TLS só na própria máquina. Num servidor remoto sem TLS,
+// qualquer um no caminho poderia trocar o SDP (fingerprint DTLS) e interceptar a mídia.
+export function isValidSignalingUrl(value: unknown): value is string {
+  if (typeof value !== "string") return false;
   const url = URL.parse(value.trim());
-  return url !== null && (url.protocol === "ws:" || url.protocol === "wss:");
+  if (!url) return false;
+  return url.protocol === "wss:" || (url.protocol === "ws:" && LOOPBACK_HOSTS.has(url.hostname));
+}
+
+export function serverLabel(value: string): string {
+  return URL.parse(value)?.host ?? value;
 }
 
 export interface SignalingHandlers {

@@ -7,6 +7,7 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -37,6 +38,8 @@ jobs:
             app: release/*/win-unpacked/ScreenShare.exe
             artifact: release/*/*.exe
     runs-on: ${{ matrix.os }}
+    # Um app travado no smoke test não pode segurar o runner por horas.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

@@ -6,3 +6,5 @@ dist
 .omc
 src
 build
+.env*
+*.local

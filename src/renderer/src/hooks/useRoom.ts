@@ -38,6 +38,8 @@ export type RoomSession =
       selfName: string;
       hostId: PeerId;
       hostName: string;
+      // Servidor de signaling em uso, exibido na sala.
+      server: string;
     };
 
 export interface UseRoom {
@@ -87,6 +89,9 @@ export function useRoom(outgoing: OutgoingMedia): UseRoom {
   const self = useRef<{ id: PeerId; name: string } | null>(null);
   const names = useRef(new Map<PeerId, string>());
   const kicked = useRef(new Set<PeerId>());
+  // O servidor não é confiável: o host só abre conexão com quem ele mesmo aprovou.
+  const admitted = useRef(new Set<PeerId>());
+  const server = useRef("");
   const chatLimiter = useRef(new ChatRateLimiter());
   // Incrementa a cada teardown; eventos de sockets de tentativas antigas são ignorados.
   const generation = useRef(0);
@@ -147,6 +152,7 @@ export function useRoom(outgoing: OutgoingMedia): UseRoom {
     links.current.clear();
     names.current.clear();
     kicked.current.clear();
+    admitted.current.clear();
     self.current = null;
     inRoom.current = false;
     setPeers({});
@@ -204,6 +210,7 @@ export function useRoom(outgoing: OutgoingMedia): UseRoom {
             selfName: message.name,
             hostId: message.peerId,
             hostName: message.name,
+            server: server.current,
           });
           return;
         case "waiting":
@@ -221,6 +228,7 @@ export function useRoom(outgoing: OutgoingMedia): UseRoom {
             selfName: message.name,
             hostId: message.hostId,
             hostName: message.hostName,
+            server: server.current,
           });
           ensureLink(message.hostId);
           return;
@@ -234,6 +242,9 @@ export function useRoom(outgoing: OutgoingMedia): UseRoom {
           setRequests((prev) => prev.filter((r) => r.peerId !== message.peerId));
           return;
         case "peer-joined":
+          // Um servidor malicioso poderia "anunciar" um viewer que o host nunca
+          // aprovou para receber a transmissão; só aceitamos quem foi aprovado aqui.
+          if (role.current !== "host" || !admitted.current.has(message.peerId)) return;
           names.current.set(message.peerId, message.name);
           // Criar o link no host dispara negotiationneeded → offer.
           ensureLink(message.peerId);
@@ -248,11 +259,15 @@ export function useRoom(outgoing: OutgoingMedia): UseRoom {
         case "room-closed":
           teardown("O host encerrou a sala.");
           return;
-        case "signal":
-          ensureLink(message.from)
-            .handleSignal(message.payload)
+        case "signal": {
+          // Só sinalização de peers já conhecidos (host aprovado ou o próprio host);
+          // nunca cria conexão nova a partir de uma mensagem do servidor.
+          const link = links.current.get(message.from);
+          link
+            ?.handleSignal(message.payload)
             .catch((err: unknown) => console.error("Falha na negociação WebRTC", err));
           return;
+        }
         case "error":
           // Erros durante a entrada (sala inexistente, cheia) encerram a tentativa.
           if (!inRoom.current) teardown(message.message);
@@ -266,6 +281,7 @@ export function useRoom(outgoing: OutgoingMedia): UseRoom {
   const connect = useCallback(
     async (as: Role, serverUrl: string, first: ClientMessage) => {
       teardown(null);
+      server.current = serverUrl;
       const attempt = generation.current;
       const isCurrent = () => attempt === generation.current;
       role.current = as;
@@ -305,6 +321,7 @@ export function useRoom(outgoing: OutgoingMedia): UseRoom {
 
   const decide = useCallback(
     (type: "admit" | "reject", peerId: PeerId) => {
+      if (type === "admit") admitted.current.add(peerId);
       send({ type, peerId });
       setRequests((prev) => prev.filter((r) => r.peerId !== peerId));
     },
