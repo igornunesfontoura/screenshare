@@ -50,7 +50,8 @@ async function findPage() {
 
 let nextId = 1;
 
-function evaluate(ws, expression) {
+// userGesture: simula um clique do usuário (tela cheia e clipboard exigem gesto).
+function evaluate(ws, expression, { userGesture = false } = {}) {
   const call = new Promise((resolve, reject) => {
     const id = nextId++;
     ws.addEventListener("close", () => reject(new Error("Conexão de depuração fechada.")), { once: true });
@@ -67,7 +68,7 @@ function evaluate(ws, expression) {
       JSON.stringify({
         id,
         method: "Runtime.evaluate",
-        params: { expression, awaitPromise: true, returnByValue: true },
+        params: { expression, awaitPromise: true, returnByValue: true, userGesture },
       }),
     );
   });
@@ -98,6 +99,18 @@ try {
   const title = await waitFor(ws, "document.readyState === 'complete' && document.title");
   const info = JSON.parse(await evaluate(ws, "window.screenshare.platformInfo().then(JSON.stringify)"));
   const rendered = await waitFor(ws, "document.body.innerText.includes('Criar sala')");
+  // As duas dependem do handler de permissões do processo principal.
+  const fullscreen = await evaluate(
+    ws,
+    "document.body.requestFullscreen().then(() => document.fullscreenElement === document.body)" +
+      ".then(async (ok) => { await document.exitFullscreen(); return ok; }).catch((e) => String(e))",
+    { userGesture: true },
+  );
+  const clipboard = await evaluate(
+    ws,
+    "navigator.clipboard.writeText('smoke').then(() => true).catch((e) => String(e))",
+    { userGesture: true },
+  );
   ws.close();
 
   const checks = [
@@ -105,6 +118,8 @@ try {
     ["ponte do preload", typeof info.os === "string" && typeof info.captureBackend === "string", info],
     ["versão do app", info.version === version, `${info.version} (esperado ${version})`],
     ["tela inicial renderizada", rendered === true, rendered],
+    ["tela cheia permitida", fullscreen === true, fullscreen],
+    ["copiar para a área de transferência", clipboard === true, clipboard],
   ];
   for (const [name, ok, detail] of checks) {
     console.log(`${ok ? "✔" : "✖"} ${name}: ${typeof detail === "string" ? detail : JSON.stringify(detail)}`);

@@ -33,6 +33,14 @@ export function Player({ stream, stats, placeholder }: PlayerProps) {
   const [showStats, setShowStats] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [controlsVisible, setControlsVisible] = useState(true);
+  // Aviso curto quando tela cheia ou PiP são recusados (antes falhavam calados).
+  const [notice, setNotice] = useState<string | null>(null);
+  const noticeTimer = useRef<number | undefined>(undefined);
+  const showNotice = useCallback((text: string) => {
+    setNotice(text);
+    window.clearTimeout(noticeTimer.current);
+    noticeTimer.current = window.setTimeout(() => setNotice(null), 3000);
+  }, []);
 
   useEffect(() => {
     if (videoRef.current) videoRef.current.srcObject = stream;
@@ -52,14 +60,24 @@ export function Player({ stream, stats, placeholder }: PlayerProps) {
   }, []);
 
   const toggleFullscreen = useCallback(() => {
-    if (document.fullscreenElement) void document.exitFullscreen();
-    else void containerRef.current?.requestFullscreen();
-  }, []);
+    const request = document.fullscreenElement
+      ? document.exitFullscreen()
+      : containerRef.current?.requestFullscreen();
+    request?.catch((err: unknown) => {
+      console.warn("Tela cheia recusada", err);
+      showNotice("Não foi possível entrar em tela cheia.");
+    });
+  }, [showNotice]);
 
   const togglePip = useCallback(() => {
     if (document.pictureInPictureElement) void document.exitPictureInPicture();
-    else void videoRef.current?.requestPictureInPicture().catch(() => undefined);
-  }, []);
+    else {
+      videoRef.current?.requestPictureInPicture().catch((err: unknown) => {
+        console.warn("Picture-in-picture recusado", err);
+        showNotice("Picture-in-picture indisponível.");
+      });
+    }
+  }, [showNotice]);
 
   // "Ativar som" com volume zerado precisa devolver volume audível.
   const toggleMute = useCallback(() => {
@@ -100,7 +118,13 @@ export function Player({ stream, stats, placeholder }: PlayerProps) {
     hideTimer.current = window.setTimeout(() => setControlsVisible(false), HIDE_CONTROLS_MS);
   }
 
-  useEffect(() => () => window.clearTimeout(hideTimer.current), []);
+  useEffect(
+    () => () => {
+      window.clearTimeout(hideTimer.current);
+      window.clearTimeout(noticeTimer.current);
+    },
+    [],
+  );
 
   const silent = muted || volume === 0;
 
@@ -122,6 +146,12 @@ export function Player({ stream, stats, placeholder }: PlayerProps) {
       {placeholder && (
         <div className="absolute inset-0 flex items-center justify-center bg-surface text-sm text-slate-500">
           {placeholder}
+        </div>
+      )}
+
+      {notice && (
+        <div role="status" className="absolute top-3 right-3 rounded bg-black/80 px-3 py-1.5 text-xs text-amber-300">
+          {notice}
         </div>
       )}
 

@@ -75,7 +75,12 @@ function RoomHeader({ code, server, isHost, onLeave }: RoomHeaderProps) {
   const [copied, setCopied] = useState(false);
 
   async function copyCode() {
-    await navigator.clipboard.writeText(code);
+    try {
+      await navigator.clipboard.writeText(code);
+    } catch (err) {
+      console.warn("Falha ao copiar o código", err);
+      return;
+    }
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1500);
   }

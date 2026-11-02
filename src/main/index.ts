@@ -46,8 +46,14 @@ function createWindow(): void {
   }
 }
 
-// Só câmera/microfone e captura de tela; qualquer outra permissão é negada.
-const ALLOWED_PERMISSIONS = new Set(["media", "display-capture"]);
+// Microfone, captura de tela, tela cheia do player e cópia do código da sala;
+// qualquer outra permissão é negada (e registrada, para diagnóstico).
+const ALLOWED_PERMISSIONS = new Set([
+  "media",
+  "display-capture",
+  "fullscreen",
+  "clipboard-sanitized-write",
+]);
 
 // Encode por hardware via VAAPI no Linux. Se o driver falhar, o Chromium
 // cai sozinho para o encoder por software.
@@ -57,7 +63,9 @@ if (process.platform === "linux") {
 
 app.whenReady().then(() => {
   session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
-    callback(ALLOWED_PERMISSIONS.has(permission));
+    const allowed = ALLOWED_PERMISSIONS.has(permission);
+    if (!allowed) console.warn(`Permissão negada: ${permission}`);
+    callback(allowed);
   });
   // Necessário para o renderer ver os nomes dos dispositivos de áudio sem abrir o microfone.
   session.defaultSession.setPermissionCheckHandler((_webContents, permission) =>
