@@ -1,8 +1,17 @@
 // Captura nativa de tela e áudio (DXGI/WASAPI no Windows, PipeWire no Linux).
-// Implementação real virá na Fase 3; por ora expõe só a detecção de plataforma.
 
-import { ipcMain } from "electron";
-import { IPC, type CaptureBackend, type PlatformInfo } from "../../../shared/platform.ts";
+import { app, ipcMain } from "electron";
+import {
+  IPC,
+  type CaptureBackend,
+  type PlatformInfo,
+} from "../../../shared/platform.ts";
+import { listCaptureSources, prepareCapture, registerDisplayMediaHandler } from "./capture.ts";
+import {
+  startLinuxSystemAudio,
+  stopLinuxSystemAudio,
+  stopLinuxSystemAudioSync,
+} from "./linux-audio.ts";
 
 function captureBackend(): CaptureBackend {
   switch (process.platform) {
@@ -16,6 +25,8 @@ function captureBackend(): CaptureBackend {
 }
 
 export function registerMediaIpc(): void {
+  registerDisplayMediaHandler();
+
   ipcMain.handle(
     IPC.platformInfo,
     (): PlatformInfo => ({
@@ -24,4 +35,14 @@ export function registerMediaIpc(): void {
       captureBackend: captureBackend(),
     }),
   );
+  ipcMain.handle(IPC.listCaptureSources, () => listCaptureSources());
+  ipcMain.handle(IPC.prepareCapture, (_event, request: unknown) => prepareCapture(request));
+
+  // No Windows o áudio vem pelo loopback do getDisplayMedia; só o Linux precisa disto.
+  ipcMain.handle(IPC.startSystemAudio, () =>
+    process.platform === "linux" ? startLinuxSystemAudio() : null,
+  );
+  ipcMain.handle(IPC.stopSystemAudio, () => stopLinuxSystemAudio());
+
+  app.on("will-quit", stopLinuxSystemAudioSync);
 }

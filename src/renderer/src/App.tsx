@@ -2,12 +2,21 @@ import { useEffect, useState } from "react";
 import { Cpu, Radio } from "lucide-react";
 import { Home } from "./components/Home";
 import { RoomView } from "./components/RoomView";
+import { useCapture } from "./hooks/useCapture";
 import { useRoom } from "./hooks/useRoom";
 import { getPlatformInfo, type PlatformInfo } from "./lib/platform";
 
 function App() {
   const [platform, setPlatform] = useState<PlatformInfo | null>(null);
-  const room = useRoom();
+  const capture = useCapture();
+  const room = useRoom(capture.outgoing);
+  const inRoom = room.session.status === "in-room";
+  const stopCapture = capture.stop;
+
+  // Sala encerrada (por nós, pelo servidor ou por erro) encerra a transmissão.
+  useEffect(() => {
+    if (!inRoom) stopCapture();
+  }, [inRoom, stopCapture]);
 
   useEffect(() => {
     // Fora do Tauri (ex.: `npm run dev` no navegador) o invoke falha; ignoramos.
@@ -33,7 +42,12 @@ function App() {
 
       <main className="flex flex-1 overflow-y-auto p-6">
         {room.session.status === "in-room" ? (
-          <RoomView session={room.session} peers={room.peers} onLeave={room.leave} />
+          <RoomView
+            session={room.session}
+            peers={room.peers}
+            capture={capture}
+            onLeave={room.leave}
+          />
         ) : (
           <Home
             session={room.session}
@@ -45,7 +59,7 @@ function App() {
       </main>
 
       <footer className="border-t border-border px-6 py-3 text-xs text-slate-500">
-        Fase 2 · signaling e P2P — captura de tela chega na Fase 3
+        Fase 3 · captura de tela e áudio — player completo chega na Fase 4
       </footer>
     </div>
   );

@@ -1,14 +1,30 @@
 import type { Role, SignalPayload } from "../../../../shared/protocol.ts";
+import { enableOpusStereo } from "../../../../shared/sdp.ts";
 import { iceServers } from "./ice";
+import { StatsSampler, type MediaStats } from "./stats";
 
 const PING_INTERVAL_MS = 2000;
+const STATS_INTERVAL_MS = 1000;
+const AUDIO_MAX_BITRATE = 256_000;
 
-type ControlMessage = { t: "ping"; ts: number } | { t: "pong"; ts: number };
+type ControlMessage =
+  | { t: "ping"; ts: number }
+  | { t: "pong"; ts: number }
+  | { t: "live"; live: boolean };
+
+export interface SendParams {
+  maxBitrate: number;
+  maxFramerate: number;
+  degradation: RTCDegradationPreference;
+}
 
 export interface PeerLinkEvents {
   onSignal(payload: SignalPayload): void;
   onStateChange(state: RTCPeerConnectionState): void;
   onRtt(ms: number): void;
+  onStats(stats: MediaStats): void;
+  onRemoteStream(stream: MediaStream): void;
+  onRemoteLive(live: boolean): void;
 }
 
 // Uma RTCPeerConnection com um peer remoto. O host é sempre quem faz a offer
@@ -20,11 +36,24 @@ export class PeerLink {
   private control: RTCDataChannel | null = null;
   private pendingCandidates: RTCIceCandidateInit[] = [];
   private pingTimer: number | undefined;
+  private readonly statsTimer: number;
+  private readonly stats: StatsSampler;
+
+  // Host: um transceiver por tipo, reaproveitado entre transmissões (replaceTrack).
+  private video: RTCRtpTransceiver | null = null;
+  private audio: RTCRtpTransceiver | null = null;
+  private sendParams: SendParams | null = null;
+  private live = false;
+  private mediaQueue: Promise<void> = Promise.resolve();
+
+  // Viewer: tracks recebidas do host.
+  private remoteTracks = new Map<string, MediaStreamTrack>();
 
   constructor(role: Role, events: PeerLinkEvents) {
     this.role = role;
     this.events = events;
     this.pc = new RTCPeerConnection({ iceServers: iceServers() });
+    this.stats = new StatsSampler(role === "host" ? "outbound-rtp" : "inbound-rtp");
 
     this.pc.onicecandidate = ({ candidate }) => {
       if (candidate) events.onSignal({ kind: "candidate", candidate: candidate.toJSON() });
@@ -45,23 +74,51 @@ export class PeerLink {
       this.pc.ondatachannel = ({ channel }) => {
         if (channel.label === "control") this.attachControl(channel);
       };
+      this.pc.ontrack = ({ track }) => {
+        this.remoteTracks.set(track.kind, track);
+        events.onRemoteStream(new MediaStream([...this.remoteTracks.values()]));
+      };
     }
+
+    this.statsTimer = window.setInterval(() => {
+      if (this.pc.connectionState !== "connected") return;
+      this.stats
+        .sample(this.pc)
+        .then((stats) => stats && events.onStats(stats))
+        .catch(() => undefined);
+    }, STATS_INTERVAL_MS);
+  }
+
+  // Host: passa a enviar este stream (ou para de enviar, com null).
+  setLocalStream(stream: MediaStream | null, params: SendParams): Promise<void> {
+    // Serializado: trocas rápidas de stream não podem intercalar replaceTrack.
+    this.mediaQueue = this.mediaQueue
+      .then(() => this.applyLocalStream(stream, params))
+      .catch((err: unknown) => console.error("Falha ao trocar a mídia enviada", err));
+    return this.mediaQueue;
   }
 
   async handleSignal(payload: SignalPayload): Promise<void> {
     switch (payload.kind) {
-      case "offer":
+      case "offer": {
         // Só o host faz offers; uma offer recebida pelo host é inválida.
         if (this.role === "host") return;
         await this.pc.setRemoteDescription({ type: "offer", sdp: payload.sdp });
         await this.flushCandidates();
-        await this.pc.setLocalDescription();
+        const answer = await this.pc.createAnswer();
+        // O receptor declara que aceita Opus estéreo em bitrate alto.
+        await this.pc.setLocalDescription({ type: "answer", sdp: enableOpusStereo(answer.sdp!) });
         this.events.onSignal({ kind: "answer", sdp: this.pc.localDescription!.sdp });
         return;
+      }
       case "answer":
         if (this.role === "viewer") return;
         await this.pc.setRemoteDescription({ type: "answer", sdp: payload.sdp });
         await this.flushCandidates();
+        // As encodings só existem depois da negociação; aplica bitrate/FPS agora,
+        // na mesma fila das trocas de mídia para não intercalar setParameters.
+        this.mediaQueue = this.mediaQueue.then(() => this.applySendParams());
+        await this.mediaQueue;
         return;
       case "candidate":
         // Candidatos podem chegar antes da descrição remota; guardamos até lá.
@@ -73,12 +130,78 @@ export class PeerLink {
 
   close(): void {
     window.clearInterval(this.pingTimer);
+    window.clearInterval(this.statsTimer);
     this.control?.close();
     this.pc.close();
   }
 
+  private async applyLocalStream(stream: MediaStream | null, params: SendParams): Promise<void> {
+    this.sendParams = params;
+    const videoTrack = stream?.getVideoTracks()[0] ?? null;
+    const audioTrack = stream?.getAudioTracks()[0] ?? null;
+
+    this.video = await this.attachTrack(this.video, videoTrack, stream);
+    this.audio = await this.attachTrack(this.audio, audioTrack, stream);
+    if (this.video && videoTrack) preferHardwareFriendlyCodecs(this.video);
+
+    await this.applySendParams();
+    this.live = Boolean(videoTrack);
+    this.sendControl({ t: "live", live: this.live });
+  }
+
+  private async attachTrack(
+    transceiver: RTCRtpTransceiver | null,
+    track: MediaStreamTrack | null,
+    stream: MediaStream | null,
+  ): Promise<RTCRtpTransceiver | null> {
+    if (!transceiver) {
+      // Criar o transceiver dispara negotiationneeded → offer com a nova m-line.
+      if (!track || !stream) return null;
+      return this.pc.addTransceiver(track, { direction: "sendonly", streams: [stream] });
+    }
+    await transceiver.sender.replaceTrack(track);
+    if (stream) transceiver.sender.setStreams(stream);
+    return transceiver;
+  }
+
+  // Nunca rejeita: uma falha aqui não pode impedir o aviso "live" aos viewers.
+  private async applySendParams(): Promise<void> {
+    try {
+      await this.setSendParameters();
+    } catch (err) {
+      console.warn("Falha ao aplicar bitrate/FPS", err);
+    }
+  }
+
+  private async setSendParameters(): Promise<void> {
+    const params = this.sendParams;
+    if (!params) return;
+
+    const videoSender = this.video?.sender;
+    if (videoSender?.track) {
+      const video = videoSender.getParameters();
+      if (video.encodings.length) {
+        video.encodings[0].maxBitrate = params.maxBitrate;
+        video.encodings[0].maxFramerate = params.maxFramerate;
+        (video as RTCRtpSendParameters & { degradationPreference?: RTCDegradationPreference })
+          .degradationPreference = params.degradation;
+        await videoSender.setParameters(video);
+      }
+    }
+
+    const audioSender = this.audio?.sender;
+    if (audioSender?.track) {
+      const audio = audioSender.getParameters();
+      if (audio.encodings.length) {
+        audio.encodings[0].maxBitrate = AUDIO_MAX_BITRATE;
+        await audioSender.setParameters(audio);
+      }
+    }
+  }
+
   private async sendOffer(): Promise<void> {
-    await this.pc.setLocalDescription();
+    const offer = await this.pc.createOffer();
+    await this.pc.setLocalDescription({ type: "offer", sdp: enableOpusStereo(offer.sdp!) });
     this.events.onSignal({ kind: "offer", sdp: this.pc.localDescription!.sdp });
   }
 
@@ -88,10 +211,11 @@ export class PeerLink {
     for (const candidate of pending) await this.pc.addIceCandidate(candidate);
   }
 
-  // Canal de controle: por enquanto só mede RTT; nas próximas fases leva chat e comandos.
+  // Canal de controle: RTT e estado da transmissão; nas próximas fases leva chat e comandos.
   private attachControl(channel: RTCDataChannel): void {
     this.control = channel;
     channel.onopen = () => {
+      if (this.role === "host") this.sendControl({ t: "live", live: this.live });
       this.pingTimer = window.setInterval(() => {
         this.sendControl({ t: "ping", ts: performance.now() });
       }, PING_INTERVAL_MS);
@@ -104,12 +228,30 @@ export class PeerLink {
       } catch {
         return;
       }
-      if (message.t === "ping") this.sendControl({ t: "pong", ts: message.ts });
-      else this.events.onRtt(Math.round(performance.now() - message.ts));
+      switch (message.t) {
+        case "ping":
+          this.sendControl({ t: "pong", ts: message.ts });
+          return;
+        case "pong":
+          this.events.onRtt(Math.round(performance.now() - message.ts));
+          return;
+        case "live":
+          if (this.role === "viewer") this.events.onRemoteLive(message.live);
+          return;
+      }
     };
   }
 
   private sendControl(message: ControlMessage): void {
     if (this.control?.readyState === "open") this.control.send(JSON.stringify(message));
   }
+}
+
+// H.264 primeiro: é o codec com encode por hardware mais difundido (NVENC, VAAPI,
+// Media Foundation). Os demais ficam como fallback na ordem do Chromium.
+function preferHardwareFriendlyCodecs(transceiver: RTCRtpTransceiver): void {
+  const codecs = RTCRtpReceiver.getCapabilities("video")?.codecs;
+  if (!codecs) return;
+  const isH264 = (codec: RTCRtpCodec) => codec.mimeType.toLowerCase() === "video/h264";
+  transceiver.setCodecPreferences([...codecs.filter(isH264), ...codecs.filter((c) => !isH264(c))]);
 }

@@ -16,6 +16,8 @@ function createWindow(): void {
       preload: join(import.meta.dirname, "../preload/index.cjs"),
       contextIsolation: true,
       sandbox: true,
+      // O vídeo do host precisa tocar com som sem exigir clique extra.
+      autoplayPolicy: "no-user-gesture-required",
     },
   });
 
@@ -47,10 +49,20 @@ function createWindow(): void {
 // Só câmera/microfone e captura de tela; qualquer outra permissão é negada.
 const ALLOWED_PERMISSIONS = new Set(["media", "display-capture"]);
 
+// Encode por hardware via VAAPI no Linux. Se o driver falhar, o Chromium
+// cai sozinho para o encoder por software.
+if (process.platform === "linux") {
+  app.commandLine.appendSwitch("enable-features", "AcceleratedVideoEncoder,VaapiVideoEncoder");
+}
+
 app.whenReady().then(() => {
   session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
     callback(ALLOWED_PERMISSIONS.has(permission));
   });
+  // Necessário para o renderer ver os nomes dos dispositivos de áudio sem abrir o microfone.
+  session.defaultSession.setPermissionCheckHandler((_webContents, permission) =>
+    ALLOWED_PERMISSIONS.has(permission),
+  );
   registerMediaIpc();
   createWindow();
 

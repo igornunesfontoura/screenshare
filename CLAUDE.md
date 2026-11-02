@@ -80,6 +80,12 @@ npm run dist:linux   # AppImage + deb  → release/<version>/
 npm run dist:win     # NSIS installer + portable .exe
 ```
 
+### Capture notes (Phase 3, verified on Hyprland/PipeWire)
+* **Video picker:** on Wayland `desktopCapturer.getSources` opens the xdg-desktop-portal picker and returns only the chosen source, so the app skips its own picker there (`src/main/media/capture.ts`). Windows/X11 use the in-app `SourcePicker`.
+* **Linux system audio:** Chromium hides PulseAudio "Monitor of …" devices, so `src/main/media/linux-audio.ts` remaps the default sink monitor into a normal source with `pactl load-module module-remap-source` and unloads it on stop/quit (stale modules from crashes are cleaned on next start). Requires `pactl` (pipewire-pulse/libpulse). Windows uses `audio: "loopback"` from the display-media handler.
+* **HW encoding:** H.264 is preferred via `setCodecPreferences`. On Linux, VAAPI encode only kicks in with `--enable-features=AcceleratedVideoEncoder,VaapiVideoEncoder` (set in `src/main/index.ts`); Chromium falls back to software on its own if VAAPI fails.
+* **Testing without consent prompts:** the screen picker is a consent dialog — never automate it. To exercise the WebRTC media path, inject a fake `window.screenshare` + canvas-based `getDisplayMedia` into a browser tab (host) and join from the app.
+
 ### Layout
 * `src/main/` — Electron main process; native capture lives in `src/main/media/`.
 * `src/preload/` — `contextBridge` exposing `window.screenshare` (must build to CJS, sandbox is on).

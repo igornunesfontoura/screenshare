@@ -2,10 +2,14 @@
   "compilerOptions": {
     "composite": true,
     "target": "ES2024",
-    "lib": ["ES2024"],
+    "lib": [
+      "ES2024"
+    ],
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "types": ["node"],
+    "types": [
+      "node"
+    ],
     "allowImportingTsExtensions": true,
     "isolatedModules": true,
     "skipLibCheck": true,
@@ -13,5 +17,11 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true
   },
-  "include": ["electron.vite.config.ts", "src/main", "src/preload", "shared/platform.ts"]
+  "include": [
+    "electron.vite.config.ts",
+    "src/main",
+    "src/preload",
+    "shared/platform.ts",
+    "shared/*.test.ts"
+  ]
 }

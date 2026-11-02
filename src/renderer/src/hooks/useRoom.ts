@@ -1,12 +1,25 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { PeerId, Role, ServerMessage } from "../../../../shared/protocol.ts";
-import { PeerLink } from "../lib/peer";
+import { PeerLink, type SendParams } from "../lib/peer";
 import { SIGNALING_URL, SignalingClient } from "../lib/signaling";
+import type { MediaStats } from "../lib/stats";
 
 export interface PeerStatus {
   state: RTCPeerConnectionState;
   rtt: number | null;
+  stats: MediaStats | null;
+  // Só no viewer: o que chega do host.
+  stream: MediaStream | null;
+  live: boolean;
 }
+
+// O que o host está transmitindo agora (stream null = nada).
+export interface OutgoingMedia {
+  stream: MediaStream | null;
+  params: SendParams;
+}
+
+const EMPTY_PEER: PeerStatus = { state: "new", rtt: null, stats: null, stream: null, live: false };
 
 export type RoomSession =
   | { status: "idle" }
@@ -22,7 +35,7 @@ export interface UseRoom {
   leave(): void;
 }
 
-export function useRoom(): UseRoom {
+export function useRoom(outgoing: OutgoingMedia): UseRoom {
   const [session, setSession] = useState<RoomSession>({ status: "idle" });
   const [peers, setPeers] = useState<Record<PeerId, PeerStatus>>({});
   const [error, setError] = useState<string | null>(null);
@@ -33,11 +46,13 @@ export function useRoom(): UseRoom {
   const inRoom = useRef(false);
   // Incrementa a cada teardown; eventos de sockets de tentativas antigas são ignorados.
   const generation = useRef(0);
+  // Lido por ensureLink para que viewers que entram depois já recebam a transmissão.
+  const outgoingRef = useRef(outgoing);
 
   const updatePeer = useCallback((id: PeerId, patch: Partial<PeerStatus>) => {
     setPeers((prev) => ({
       ...prev,
-      [id]: { ...(prev[id] ?? { state: "new", rtt: null }), ...patch },
+      [id]: { ...(prev[id] ?? EMPTY_PEER), ...patch },
     }));
   }, []);
 
@@ -68,9 +83,15 @@ export function useRoom(): UseRoom {
         onSignal: (payload) => signaling.current?.send({ type: "signal", to: id, payload }),
         onStateChange: (state) => updatePeer(id, { state }),
         onRtt: (rtt) => updatePeer(id, { rtt }),
+        onStats: (stats) => updatePeer(id, { stats }),
+        onRemoteStream: (stream) => updatePeer(id, { stream }),
+        onRemoteLive: (live) => updatePeer(id, { live }),
       });
       links.current.set(id, link);
       updatePeer(id, { state: "new" });
+      if (role.current === "host" && outgoingRef.current.stream) {
+        void link.setLocalStream(outgoingRef.current.stream, outgoingRef.current.params);
+      }
       return link;
     },
     [updatePeer],
@@ -161,6 +182,12 @@ export function useRoom(): UseRoom {
     [connect],
   );
   const leave = useCallback(() => teardown(null), [teardown]);
+
+  useEffect(() => {
+    outgoingRef.current = outgoing;
+    if (role.current !== "host") return;
+    for (const link of links.current.values()) void link.setLocalStream(outgoing.stream, outgoing.params);
+  }, [outgoing]);
 
   useEffect(() => () => teardown(null), [teardown]);
 

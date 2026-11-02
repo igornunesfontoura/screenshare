@@ -14,7 +14,8 @@
     "dist:linux": "npm run build && electron-builder --linux",
     "dist:win": "npm run build && electron-builder --win",
     "signal": "npm --prefix server start",
-    "test:server": "npm --prefix server test"
+    "test:server": "npm --prefix server test",
+    "test": "node --test shared/*.test.ts && npm --prefix server test"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",
