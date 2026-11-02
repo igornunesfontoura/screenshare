@@ -116,6 +116,9 @@ export async function startCapture(
     }
   }
 
+  // Sem isto o WebRTC trata a trilha como voz (processamento e codificação de fala).
+  for (const audio of stream.getAudioTracks()) audio.contentHint = "music";
+
   return { stream, warning };
 }
 

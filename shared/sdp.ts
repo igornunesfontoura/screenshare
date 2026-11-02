@@ -1,9 +1,10 @@
 // Ajustes de SDP que a API do WebRTC não expõe diretamente.
 
-const OPUS_HIGH_QUALITY = "stereo=1;sprop-stereo=1;maxaveragebitrate=256000";
+const OPUS_HIGH_QUALITY = "stereo=1;sprop-stereo=1;maxaveragebitrate=256000;usedtx=0;useinbandfec=1";
 
 // O Opus é negociado em mono e ~32 kbps por padrão; para filmes e música
-// pedimos estéreo com bitrate alto em todas as linhas fmtp do Opus.
+// pedimos estéreo com bitrate alto, sem DTX (corta "silêncios" e picota música)
+// e com FEC (recupera pacotes perdidos), em todas as linhas fmtp do Opus.
 export function enableOpusStereo(sdp: string): string {
   const opusPayloads = [...sdp.matchAll(/^a=rtpmap:(\d+) opus\/48000/gim)].map((m) => m[1]);
 
@@ -13,7 +14,10 @@ export function enableOpusStereo(sdp: string): string {
     return current.replace(fmtp, (_line, prefix: string, params: string) => {
       const kept = params
         .split(";")
-        .filter((param) => !/^(stereo|sprop-stereo|maxaveragebitrate)=/.test(param.trim()));
+        .filter(
+          (param) =>
+            !/^(stereo|sprop-stereo|maxaveragebitrate|usedtx|useinbandfec)=/.test(param.trim()),
+        );
       return prefix + [...kept, OPUS_HIGH_QUALITY].join(";");
     });
   }, sdp);

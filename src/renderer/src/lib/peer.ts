@@ -7,6 +7,16 @@ import { StatsSampler, type MediaStats } from "./stats";
 const PING_INTERVAL_MS = 2000;
 const STATS_INTERVAL_MS = 1000;
 const AUDIO_MAX_BITRATE = 256_000;
+// Folga do buffer do viewer para a transmissão (áudio e vídeo sincronizados).
+// Na internet, um buffer curto obriga o receptor a esticar/inventar áudio, o que
+// soa "robotizado" em música e filmes; ~250 ms de atraso são imperceptíveis aqui.
+const MEDIA_JITTER_BUFFER_MS = 250;
+
+type ReceiverWithTarget = RTCRtpReceiver & { jitterBufferTarget?: number | null };
+type PrioritizedEncoding = RTCRtpEncodingParameters & {
+  priority?: RTCPriorityType;
+  networkPriority?: RTCPriorityType;
+};
 
 type ControlMessage =
   | { t: "ping"; ts: number }
@@ -88,6 +98,7 @@ export class PeerLink {
         return;
       }
       if (role === "viewer") {
+        (transceiver.receiver as ReceiverWithTarget).jitterBufferTarget = MEDIA_JITTER_BUFFER_MS;
         this.remoteTracks.set(track.kind, track);
         events.onRemoteStream(new MediaStream([...this.remoteTracks.values()]));
       }
@@ -247,7 +258,11 @@ export class PeerLink {
     if (audioSender?.track) {
       const audio = audioSender.getParameters();
       if (audio.encodings.length) {
-        audio.encodings[0].maxBitrate = AUDIO_MAX_BITRATE;
+        const encoding = audio.encodings[0] as PrioritizedEncoding;
+        encoding.maxBitrate = AUDIO_MAX_BITRATE;
+        // Em congestionamento, o vídeo cede antes do som.
+        encoding.priority = "high";
+        encoding.networkPriority = "high";
         await audioSender.setParameters(audio);
       }
     }
