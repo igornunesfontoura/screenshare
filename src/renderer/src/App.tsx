@@ -42,24 +42,20 @@ function App() {
 
       <main className="flex flex-1 overflow-y-auto p-6">
         {room.session.status === "in-room" ? (
-          <RoomView
-            session={room.session}
-            peers={room.peers}
-            capture={capture}
-            onLeave={room.leave}
-          />
+          <RoomView session={room.session} room={room} capture={capture} />
         ) : (
           <Home
             session={room.session}
             error={room.error}
             onCreate={room.createRoom}
             onJoin={room.joinRoom}
+            onCancel={room.leave}
           />
         )}
       </main>
 
       <footer className="border-t border-border px-6 py-3 text-xs text-slate-500">
-        Fase 3 · captura de tela e áudio — player completo chega na Fase 4
+        Fase 4 · player, chat e controle da sala — chat de voz numa fase própria
       </footer>
     </div>
   );

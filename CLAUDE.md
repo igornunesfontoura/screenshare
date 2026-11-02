@@ -86,6 +86,10 @@ npm run dist:win     # NSIS installer + portable .exe
 * **HW encoding:** H.264 is preferred via `setCodecPreferences`. On Linux, VAAPI encode only kicks in with `--enable-features=AcceleratedVideoEncoder,VaapiVideoEncoder` (set in `src/main/index.ts`); Chromium falls back to software on its own if VAAPI fails.
 * **Testing without consent prompts:** the screen picker is a consent dialog — never automate it. To exercise the WebRTC media path, inject a fake `window.screenshare` + canvas-based `getDisplayMedia` into a browser tab (host) and join from the app.
 
+### Room flow (Phase 4)
+* Joining puts the viewer in a server-side waiting room (`waiting` → host gets `join-request` → `admit`/`reject`); pending viewers count toward `MAX_VIEWERS` and cannot signal. Hosts can `kick`.
+* Chat rides the `control` DataChannel: viewers send `chat-send`, the host stamps author/time (from server-provided names, so viewers can't spoof) and fans out `chat` to everyone; late joiners receive the history when their channel opens.
+
 ### Layout
 * `src/main/` — Electron main process; native capture lives in `src/main/media/`.
 * `src/preload/` — `contextBridge` exposing `window.screenshare` (must build to CJS, sandbox is on).
@@ -122,5 +126,9 @@ When prompting Claude Code to build this project step-by-step, use the following
    * Implement system media capture (`getDisplayMedia` with audio loopback & OS fallback).
 4. **Phase 4: Player UI & Control Panel**
    * Create stream viewer, fullscreen toggle, audio meters, chat sidebar, and stream quality settings.
+   * Done alongside: display names, host approval/kick of viewers (server-side waiting room).
 5. **Phase 5: Packaging & Testing**
    * Configure electron-builder for Linux AppImage/deb and Windows `.exe`.
+6. **Phase 6: Voice Chat (push-to-talk)**
+   * Blocker to solve first: the host's system-audio capture is the default sink monitor, so viewers' voices played on the host get re-captured and echo back. Needs the app's own playback routed outside the captured sink (PipeWire per-app linking on Linux; `restrictOwnAudio`/process-excluding loopback on Windows).
+   * Topology is a star: the host must mix/forward viewer voices (only the host sends offers, so the viewer voice transceiver must be negotiated by the host up front).

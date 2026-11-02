@@ -1,6 +1,14 @@
 import { AlertTriangle, Loader2, MonitorUp, Square } from "lucide-react";
 import type { UseCapture } from "../hooks/useCapture";
-import { BITRATE_RANGE, RESOLUTIONS, type ContentKind, type Resolution } from "../lib/capture";
+import {
+  BITRATE_RANGE,
+  QUALITY_PRESETS,
+  RESOLUTIONS,
+  matchesPreset,
+  type ContentKind,
+  type Resolution,
+} from "../lib/capture";
+import { AudioMeter } from "./AudioMeter";
 import { SourcePicker } from "./SourcePicker";
 import { VideoView } from "./VideoView";
 
@@ -51,10 +59,36 @@ export function SharePanel({ capture }: { capture: UseCapture }) {
       )}
 
       {live && (
-        <div className="mb-4 aspect-video overflow-hidden rounded-lg border border-border">
-          <VideoView stream={capture.stream} muted />
+        <div className="mb-4 space-y-2">
+          <div className="aspect-video overflow-hidden rounded-lg border border-border">
+            <VideoView stream={capture.stream} muted />
+          </div>
+          {capture.stream?.getAudioTracks().length ? (
+            <div className="flex items-center gap-3 text-xs text-slate-400">
+              Áudio do sistema
+              <AudioMeter stream={capture.stream} label="Nível do áudio transmitido" className="flex-1" />
+            </div>
+          ) : null}
         </div>
       )}
+
+      <fieldset className="mb-4">
+        <legend className="mb-2 text-sm text-slate-400">Qualidade</legend>
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+          {QUALITY_PRESETS.map((preset) => (
+            <button
+              key={preset.id}
+              type="button"
+              onClick={() => updateSettings(preset.settings)}
+              aria-pressed={matchesPreset(settings, preset.settings)}
+              className="rounded-lg border border-border px-3 py-2 text-left transition hover:border-slate-500 aria-pressed:border-emerald-400 aria-pressed:bg-emerald-400/5"
+            >
+              <span className="block text-sm font-medium">{preset.label}</span>
+              <span className="block text-xs text-slate-500">{preset.hint}</span>
+            </button>
+          ))}
+        </div>
+      </fieldset>
 
       <div className="grid gap-4 text-sm sm:grid-cols-2">
         <label className="space-y-1.5">

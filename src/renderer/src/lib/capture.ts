@@ -30,6 +30,39 @@ export const RESOLUTIONS: Record<Resolution, { width: number; height: number; la
 
 export const BITRATE_RANGE = { min: 2, max: 50 } as const;
 
+export type QualitySettings = Omit<CaptureSettings, "systemAudio">;
+
+export const QUALITY_PRESETS: { id: string; label: string; hint: string; settings: QualitySettings }[] = [
+  {
+    id: "movie",
+    label: "Filme",
+    hint: "1080p · 30 FPS · 10 Mbps",
+    settings: { resolution: "1080p", fps: 30, bitrateMbps: 10, content: "motion" },
+  },
+  {
+    id: "game",
+    label: "Jogo",
+    hint: "1080p · 60 FPS · 20 Mbps",
+    settings: { resolution: "1080p", fps: 60, bitrateMbps: 20, content: "motion" },
+  },
+  {
+    id: "slides",
+    label: "Apresentação",
+    hint: "1440p · 30 FPS · 6 Mbps",
+    settings: { resolution: "1440p", fps: 30, bitrateMbps: 6, content: "detail" },
+  },
+  {
+    id: "4k",
+    label: "4K",
+    hint: "2160p · 60 FPS · 35 Mbps",
+    settings: { resolution: "2160p", fps: 60, bitrateMbps: 35, content: "motion" },
+  },
+];
+
+export function matchesPreset(settings: CaptureSettings, preset: QualitySettings): boolean {
+  return (Object.keys(preset) as (keyof QualitySettings)[]).every((k) => settings[k] === preset[k]);
+}
+
 // O PipeWire publica a fonte remapeada de forma assíncrona após o pactl.
 const AUDIO_DEVICE_WAIT_MS = 2000;
 const AUDIO_DEVICE_POLL_MS = 100;

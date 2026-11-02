@@ -1,33 +1,76 @@
 import { useState, type FormEvent } from "react";
-import { AlertTriangle, Loader2, LogIn, MonitorUp } from "lucide-react";
-import { ROOM_CODE_LENGTH, isValidRoomCode } from "../../../../shared/protocol.ts";
+import { AlertTriangle, Hourglass, Loader2, LogIn, MonitorUp, UserRound } from "lucide-react";
+import {
+  MAX_NAME_LENGTH,
+  ROOM_CODE_LENGTH,
+  isValidRoomCode,
+} from "../../../../shared/protocol.ts";
+import { usePersistentState } from "../hooks/usePersistentState";
 import type { RoomSession } from "../hooks/useRoom";
 
 interface HomeProps {
   session: RoomSession;
   error: string | null;
-  onCreate(): void;
-  onJoin(code: string): void;
+  onCreate(name: string): void;
+  onJoin(code: string, name: string): void;
+  onCancel(): void;
 }
 
-export function Home({ session, error, onCreate, onJoin }: HomeProps) {
+function randomGuestName(): string {
+  return `Convidado-${Math.floor(1000 + Math.random() * 9000)}`;
+}
+
+export function Home({ session, error, onCreate, onJoin, onCancel }: HomeProps) {
   const [roomCode, setRoomCode] = useState("");
+  const [name, setName] = usePersistentState("screenshare:name", randomGuestName);
   const connecting = session.status === "connecting";
   const busy = (role: "host" | "viewer") => connecting && session.role === role;
+  const displayName = name.trim() || randomGuestName();
 
   function submitJoin(e: FormEvent) {
     e.preventDefault();
-    if (isValidRoomCode(roomCode)) onJoin(roomCode);
+    if (isValidRoomCode(roomCode)) onJoin(roomCode, displayName);
+  }
+
+  if (session.status === "waiting") {
+    return (
+      <div className="m-auto w-full max-w-md rounded-xl border border-border bg-surface p-8 text-center">
+        <Hourglass className="mx-auto mb-4 h-10 w-10 animate-pulse text-cyan-400" />
+        <h2 className="mb-1 text-xl font-semibold">Aguardando o host</h2>
+        <p className="mb-6 text-sm text-slate-400">
+          Seu pedido para entrar na sala{" "}
+          <span className="font-mono text-slate-200">{session.code}</span> foi enviado.
+        </p>
+        <button
+          type="button"
+          onClick={onCancel}
+          className="rounded-lg border border-border px-4 py-2 text-sm text-slate-300 transition hover:border-red-500/50 hover:text-red-300"
+        >
+          Cancelar
+        </button>
+      </div>
+    );
   }
 
   return (
-    <div className="m-auto w-full max-w-3xl">
+    <div className="m-auto w-full max-w-3xl space-y-6">
       {error && (
-        <div className="mb-6 flex items-center gap-3 rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+        <div className="flex items-center gap-3 rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-300">
           <AlertTriangle className="h-4 w-4 shrink-0" />
           {error}
         </div>
       )}
+
+      <label className="flex items-center gap-3 rounded-xl border border-border bg-surface px-4 py-3">
+        <UserRound className="h-5 w-5 shrink-0 text-slate-400" />
+        <span className="shrink-0 text-sm text-slate-400">Seu nome</span>
+        <input
+          value={name}
+          onChange={(e) => setName(e.currentTarget.value)}
+          maxLength={MAX_NAME_LENGTH}
+          className="min-w-0 flex-1 bg-transparent text-slate-100 outline-none select-text"
+        />
+      </label>
 
       <div className="grid gap-6 md:grid-cols-2">
         <section className="rounded-xl border border-border bg-surface p-6">
@@ -38,7 +81,7 @@ export function Home({ session, error, onCreate, onJoin }: HomeProps) {
           </p>
           <button
             type="button"
-            onClick={onCreate}
+            onClick={() => onCreate(displayName)}
             disabled={connecting}
             className="flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-500 py-2.5 font-medium text-void transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-40"
           >

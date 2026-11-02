@@ -3,6 +3,7 @@ import type { AddressInfo } from "node:net";
 import { WebSocketServer, type WebSocket } from "ws";
 import {
   isValidRoomCode,
+  sanitizeName,
   type ClientMessage,
   type ServerMessage,
   type SignalPayload,
@@ -17,10 +18,11 @@ export interface SignalingOptions {
   // Atrás de proxy (Render, Fly.io) o IP real vem em X-Forwarded-For.
   trustProxy?: boolean;
   joinsPerMinute?: number;
+  pendingTimeoutMs?: number;
 }
 
 export function startSignalingServer(port: number, options: SignalingOptions = {}): WebSocketServer {
-  const registry = new RoomRegistry();
+  const registry = new RoomRegistry(options.pendingTimeoutMs);
   const joinLimiter = new JoinRateLimiter(options.joinsPerMinute);
   const wss = new WebSocketServer({ port, maxPayload: MAX_MESSAGE_BYTES });
   const alive = new WeakMap<WebSocket, boolean>();
@@ -91,8 +93,9 @@ function handle(
 ): void {
   switch (message?.type) {
     case "create": {
-      const code = registry.create(peer);
-      peer.send({ type: "created", code, peerId: peer.id });
+      const name = sanitizeName(message.name);
+      const code = registry.create(peer, name);
+      peer.send({ type: "created", code, peerId: peer.id, name });
       return;
     }
     case "join": {
@@ -103,8 +106,16 @@ function handle(
       if (!allowJoin()) {
         throw new RoomError("rate-limited", "Muitas tentativas. Aguarde um minuto.");
       }
-      const room = registry.join(message.code, peer);
-      peer.send({ type: "joined", code: room.code, peerId: peer.id, hostId: room.host.id });
+      registry.requestJoin(message.code, peer, sanitizeName(message.name));
+      return;
+    }
+    case "admit":
+    case "reject":
+    case "kick": {
+      if (typeof message.peerId !== "string") {
+        throw new RoomError("bad-message", "Peer inválido.");
+      }
+      registry[message.type](peer, message.peerId);
       return;
     }
     case "signal": {
@@ -154,4 +165,6 @@ if (import.meta.main) {
     const { port } = wss.address() as AddressInfo;
     console.log(`Signaling server ouvindo em ws://localhost:${port}`);
   });
+  // Sem a porta (ex.: EADDRINUSE) o processo não serve para nada; sai com erro.
+  wss.once("error", () => process.exit(1));
 }

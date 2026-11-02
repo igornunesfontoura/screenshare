@@ -1,5 +1,6 @@
 import type { Role, SignalPayload } from "../../../../shared/protocol.ts";
 import { enableOpusStereo } from "../../../../shared/sdp.ts";
+import { cleanChatText, isChatMessage, type ChatMessage } from "./chat";
 import { iceServers } from "./ice";
 import { StatsSampler, type MediaStats } from "./stats";
 
@@ -10,7 +11,10 @@ const AUDIO_MAX_BITRATE = 256_000;
 type ControlMessage =
   | { t: "ping"; ts: number }
   | { t: "pong"; ts: number }
-  | { t: "live"; live: boolean };
+  | { t: "live"; live: boolean }
+  // viewer → host: o host carimba autor/hora e repassa a todos como "chat".
+  | { t: "chat-send"; text: string }
+  | { t: "chat"; message: ChatMessage };
 
 export interface SendParams {
   maxBitrate: number;
@@ -25,6 +29,11 @@ export interface PeerLinkEvents {
   onStats(stats: MediaStats): void;
   onRemoteStream(stream: MediaStream): void;
   onRemoteLive(live: boolean): void;
+  // Host: texto enviado por este viewer. Viewer: mensagem repassada pelo host.
+  onChatSend(text: string): void;
+  onChat(message: ChatMessage): void;
+  // Canal de controle pronto (o host usa para mandar o histórico do chat).
+  onControlOpen(): void;
 }
 
 // Uma RTCPeerConnection com um peer remoto. O host é sempre quem faz a offer
@@ -96,6 +105,15 @@ export class PeerLink {
       .then(() => this.applyLocalStream(stream, params))
       .catch((err: unknown) => console.error("Falha ao trocar a mídia enviada", err));
     return this.mediaQueue;
+  }
+
+  // false quando o canal ainda não abriu (a mensagem não foi enviada).
+  sendChatText(text: string): boolean {
+    return this.sendControl({ t: "chat-send", text });
+  }
+
+  deliverChat(message: ChatMessage): void {
+    this.sendControl({ t: "chat", message });
   }
 
   async handleSignal(payload: SignalPayload): Promise<void> {
@@ -216,6 +234,7 @@ export class PeerLink {
     this.control = channel;
     channel.onopen = () => {
       if (this.role === "host") this.sendControl({ t: "live", live: this.live });
+      this.events.onControlOpen();
       this.pingTimer = window.setInterval(() => {
         this.sendControl({ t: "ping", ts: performance.now() });
       }, PING_INTERVAL_MS);
@@ -236,14 +255,26 @@ export class PeerLink {
           this.events.onRtt(Math.round(performance.now() - message.ts));
           return;
         case "live":
-          if (this.role === "viewer") this.events.onRemoteLive(message.live);
+          if (this.role === "viewer") this.events.onRemoteLive(message.live === true);
+          return;
+        case "chat-send": {
+          const text = cleanChatText(message.text);
+          if (this.role === "host" && text) this.events.onChatSend(text);
+          return;
+        }
+        case "chat":
+          if (this.role === "viewer" && isChatMessage(message.message)) {
+            this.events.onChat(message.message);
+          }
           return;
       }
     };
   }
 
-  private sendControl(message: ControlMessage): void {
-    if (this.control?.readyState === "open") this.control.send(JSON.stringify(message));
+  private sendControl(message: ControlMessage): boolean {
+    if (this.control?.readyState !== "open") return false;
+    this.control.send(JSON.stringify(message));
+    return true;
   }
 }
 

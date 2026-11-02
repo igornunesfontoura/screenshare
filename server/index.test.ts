@@ -4,14 +4,19 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import { WebSocket, type WebSocketServer } from "ws";
-import type { ClientMessage, ServerMessage } from "../shared/protocol.ts";
+import {
+  MAX_PENDING,
+  sanitizeName,
+  type ClientMessage,
+  type ServerMessage,
+} from "../shared/protocol.ts";
 import { startSignalingServer } from "./index.ts";
 
 let wss: WebSocketServer;
 let url: string;
 
 before(async () => {
-  wss = startSignalingServer(0, { joinsPerMinute: 1000 });
+  wss = startSignalingServer(0, { joinsPerMinute: 1000, pendingTimeoutMs: 1000 });
   await new Promise((resolve) => wss.once("listening", resolve));
   url = `ws://localhost:${(wss.address() as AddressInfo).port}`;
 });
@@ -61,18 +66,41 @@ class TestClient {
   }
 }
 
-async function createRoom() {
+
+function expectType<T extends ServerMessage["type"]>(
+  message: ServerMessage,
+  type: T,
+): Extract<ServerMessage, { type: T }> {
+  assert.equal(message.type, type, JSON.stringify(message));
+  return message as Extract<ServerMessage, { type: T }>;
+}
+
+async function createRoom(name = "Host") {
   const host = await TestClient.connect();
-  host.send({ type: "create" });
-  const created = await host.next();
-  assert.equal(created.type, "created");
+  host.send({ type: "create", name });
+  const created = expectType(await host.next(), "created");
   return { host, code: created.code, hostId: created.peerId };
 }
 
-async function joinRoom(code: string) {
+// Pede para entrar e consome o "waiting" do viewer e o "join-request" do host.
+async function requestJoin(host: TestClient, code: string, name = "Viewer") {
   const viewer = await TestClient.connect();
-  viewer.send({ type: "join", code });
-  return { viewer, joined: await viewer.next() };
+  viewer.send({ type: "join", code, name });
+  expectType(await viewer.next(), "waiting");
+  const request = expectType(await host.next(), "join-request");
+  return { viewer, viewerId: request.peerId, name: request.name };
+}
+
+async function joinApproved(host: TestClient, code: string, name = "Viewer") {
+  const { viewer, viewerId } = await requestJoin(host, code, name);
+  host.send({ type: "admit", peerId: viewerId });
+  const joined = expectType(await viewer.next(), "joined");
+  expectType(await host.next(), "peer-joined");
+  return { viewer, viewerId, joined };
+}
+
+function closeAll(...clients: TestClient[]) {
+  for (const client of clients) client.close();
 }
 
 describe("signaling server", () => {
@@ -82,26 +110,85 @@ describe("signaling server", () => {
     host.close();
   });
 
-  it("viewer entra e host é notificado", async () => {
+  it("viewer só entra depois que o host aprova", async () => {
+    const { host, code, hostId } = await createRoom("Ana");
+    const { viewer, viewerId, name } = await requestJoin(host, code, "Bia");
+    assert.equal(name, "Bia");
+
+    host.send({ type: "admit", peerId: viewerId });
+    assert.deepEqual(await viewer.next(), {
+      type: "joined",
+      code,
+      peerId: viewerId,
+      hostId,
+      hostName: "Ana",
+      name: "Bia",
+    });
+    assert.deepEqual(await host.next(), { type: "peer-joined", peerId: viewerId, name: "Bia" });
+    closeAll(host, viewer);
+  });
+
+  it("host recusa um pedido de entrada", async () => {
+    const { host, code } = await createRoom();
+    const { viewer, viewerId } = await requestJoin(host, code);
+
+    host.send({ type: "reject", peerId: viewerId });
+    assert.deepEqual(await viewer.next(), { type: "removed", reason: "rejected" });
+
+    // Recusado pode tentar de novo (não ficou preso à sala).
+    viewer.send({ type: "join", code, name: "De novo" });
+    expectType(await viewer.next(), "waiting");
+    closeAll(host, viewer);
+  });
+
+  it("host expulsa um viewer aprovado", async () => {
     const { host, code, hostId } = await createRoom();
-    const { viewer, joined } = await joinRoom(code);
+    const { viewer, viewerId } = await joinApproved(host, code);
 
-    assert.equal(joined.type, "joined");
-    assert.equal(joined.type === "joined" && joined.hostId, hostId);
-    const notice = await host.next();
-    assert.deepEqual(notice, { type: "peer-joined", peerId: joined.type === "joined" && joined.peerId });
+    host.send({ type: "kick", peerId: viewerId });
+    assert.deepEqual(await viewer.next(), { type: "removed", reason: "kicked" });
+    assert.deepEqual(await host.next(), { type: "peer-left", peerId: viewerId });
 
-    host.close();
+    viewer.send({ type: "signal", to: hostId, payload: { kind: "answer", sdp: "x" } });
+    expectType(await viewer.next(), "error");
+    closeAll(host, viewer);
+  });
+
+  it("viewer não pode aprovar, recusar nem expulsar", async () => {
+    const { host, code } = await createRoom();
+    const a = await joinApproved(host, code, "A");
+    const b = await requestJoin(host, code, "B");
+
+    a.viewer.send({ type: "admit", peerId: b.viewerId });
+    assert.equal(expectType(await a.viewer.next(), "error").code, "not-host");
+    a.viewer.send({ type: "kick", peerId: a.viewerId });
+    assert.equal(expectType(await a.viewer.next(), "error").code, "not-host");
+    closeAll(host, a.viewer, b.viewer);
+  });
+
+  it("viewer na fila não pode sinalizar o host", async () => {
+    const { host, code, hostId } = await createRoom();
+    const { viewer } = await requestJoin(host, code);
+
+    viewer.send({ type: "signal", to: hostId, payload: { kind: "answer", sdp: "x" } });
+    assert.equal(expectType(await viewer.next(), "error").code, "not-in-room");
+    closeAll(host, viewer);
+  });
+
+  it("avisa o host quando quem estava na fila desiste", async () => {
+    const { host, code } = await createRoom();
+    const { viewer, viewerId } = await requestJoin(host, code);
+
     viewer.close();
+    assert.deepEqual(await host.next(), { type: "join-cancelled", peerId: viewerId });
+    host.close();
   });
 
   it("repassa sinalização nos dois sentidos", async () => {
     const { host, code, hostId } = await createRoom();
-    const { viewer, joined } = await joinRoom(code);
-    assert.equal(joined.type, "joined");
-    await host.next(); // peer-joined
+    const { viewer, viewerId } = await joinApproved(host, code);
 
-    host.send({ type: "signal", to: joined.peerId, payload: { kind: "offer", sdp: "v=0 offer" } });
+    host.send({ type: "signal", to: viewerId, payload: { kind: "offer", sdp: "v=0 offer" } });
     assert.deepEqual(await viewer.next(), {
       type: "signal",
       from: hostId,
@@ -111,50 +198,35 @@ describe("signaling server", () => {
     viewer.send({ type: "signal", to: hostId, payload: { kind: "answer", sdp: "v=0 answer" } });
     assert.deepEqual(await host.next(), {
       type: "signal",
-      from: joined.peerId,
+      from: viewerId,
       payload: { kind: "answer", sdp: "v=0 answer" },
     });
-
-    host.close();
-    viewer.close();
+    closeAll(host, viewer);
   });
 
   it("viewer não pode sinalizar outro viewer", async () => {
     const { host, code } = await createRoom();
-    const a = await joinRoom(code);
-    const b = await joinRoom(code);
-    assert.equal(b.joined.type, "joined");
+    const a = await joinApproved(host, code, "A");
+    const b = await joinApproved(host, code, "B");
 
-    a.viewer.send({
-      type: "signal",
-      to: b.joined.type === "joined" ? b.joined.peerId : "",
-      payload: { kind: "answer", sdp: "x" },
-    });
-    const reply = await a.viewer.next();
-    assert.equal(reply.type, "error");
-    assert.equal(reply.type === "error" && reply.code, "unknown-peer");
-
-    host.close();
-    a.viewer.close();
-    b.viewer.close();
+    a.viewer.send({ type: "signal", to: b.viewerId, payload: { kind: "answer", sdp: "x" } });
+    assert.equal(expectType(await a.viewer.next(), "error").code, "unknown-peer");
+    closeAll(host, a.viewer, b.viewer);
   });
 
   it("rejeita código inexistente e mal formado", async () => {
-    const missing = await joinRoom("000000");
-    assert.equal(missing.joined.type === "error" && missing.joined.code, "room-not-found");
-
-    const malformed = await joinRoom("12ab");
-    assert.equal(malformed.joined.type === "error" && malformed.joined.code, "bad-message");
-
-    missing.viewer.close();
-    malformed.viewer.close();
+    const client = await TestClient.connect();
+    client.send({ type: "join", code: "000000", name: "X" });
+    assert.equal(expectType(await client.next(), "error").code, "room-not-found");
+    client.send({ type: "join", code: "12ab", name: "X" });
+    assert.equal(expectType(await client.next(), "error").code, "bad-message");
+    client.close();
   });
 
   it("responde erro a JSON inválido", async () => {
     const client = await TestClient.connect();
     client.ws.send("{not json");
-    const reply = await client.next();
-    assert.equal(reply.type === "error" && reply.code, "bad-message");
+    assert.equal(expectType(await client.next(), "error").code, "bad-message");
     client.close();
   });
 
@@ -175,7 +247,7 @@ describe("signaling server", () => {
 
       const probe = new WebSocket(childUrl);
       await once(probe, "open");
-      probe.send(JSON.stringify({ type: "create" }));
+      probe.send(JSON.stringify({ type: "create", name: "probe" }));
       const [reply] = (await once(probe, "message")) as [Buffer];
       assert.equal(JSON.parse(reply.toString()).type, "created");
       assert.equal(child.exitCode, null);
@@ -187,66 +259,90 @@ describe("signaling server", () => {
 
   it("rejeita payload de sinalização malformado", async () => {
     const { host, code } = await createRoom();
-    const { viewer, joined } = await joinRoom(code);
-    await host.next(); // peer-joined
+    const { viewer, viewerId } = await joinApproved(host, code);
 
-    host.send({ type: "signal", to: joined.type === "joined" ? joined.peerId : "", payload: null });
-    const reply = await host.next();
-    assert.equal(reply.type === "error" && reply.code, "bad-message");
-
-    host.close();
-    viewer.close();
+    host.send({ type: "signal", to: viewerId, payload: null });
+    assert.equal(expectType(await host.next(), "error").code, "bad-message");
+    closeAll(host, viewer);
   });
 
   it("viewer não pode mandar offer ao host", async () => {
     const { host, code, hostId } = await createRoom();
-    const { viewer } = await joinRoom(code);
-    await host.next(); // peer-joined
+    const { viewer } = await joinApproved(host, code);
 
     viewer.send({ type: "signal", to: hostId, payload: { kind: "offer", sdp: "v=0" } });
-    const reply = await viewer.next();
-    assert.equal(reply.type === "error" && reply.code, "bad-message");
-
-    host.close();
-    viewer.close();
+    assert.equal(expectType(await viewer.next(), "error").code, "bad-message");
+    closeAll(host, viewer);
   });
 
-  it("fecha a sala para os viewers quando o host sai", async () => {
+  it("fecha a sala para viewers e fila quando o host sai", async () => {
     const { host, code } = await createRoom();
-    const { viewer } = await joinRoom(code);
-    await host.next(); // peer-joined
+    const { viewer } = await joinApproved(host, code);
+    const waiting = await requestJoin(host, code);
 
     host.close();
     assert.deepEqual(await viewer.next(), { type: "room-closed" });
+    assert.deepEqual(await waiting.viewer.next(), { type: "room-closed" });
 
-    const late = await joinRoom(code);
-    assert.equal(late.joined.type === "error" && late.joined.code, "room-not-found");
-    viewer.close();
-    late.viewer.close();
+    const late = await TestClient.connect();
+    late.send({ type: "join", code, name: "X" });
+    assert.equal(expectType(await late.next(), "error").code, "room-not-found");
+    closeAll(viewer, waiting.viewer, late);
   });
 
   it("avisa o host quando um viewer sai", async () => {
     const { host, code } = await createRoom();
-    const { viewer, joined } = await joinRoom(code);
-    await host.next(); // peer-joined
+    const { viewer, viewerId } = await joinApproved(host, code);
 
     viewer.close();
-    assert.deepEqual(await host.next(), {
-      type: "peer-left",
-      peerId: joined.type === "joined" && joined.peerId,
-    });
+    assert.deepEqual(await host.next(), { type: "peer-left", peerId: viewerId });
     host.close();
   });
 
   it("limita a sala a 8 viewers", async () => {
     const { host, code } = await createRoom();
-    const viewers = [];
-    for (let i = 0; i < 8; i++) viewers.push((await joinRoom(code)).viewer);
+    const clients: TestClient[] = [];
+    for (let i = 0; i < 8; i++) clients.push((await joinApproved(host, code, `A${i}`)).viewer);
 
-    const extra = await joinRoom(code);
-    assert.equal(extra.joined.type === "error" && extra.joined.code, "room-full");
+    const extra = await TestClient.connect();
+    extra.send({ type: "join", code, name: "Extra" });
+    assert.equal(expectType(await extra.next(), "error").code, "room-full");
+    closeAll(host, extra, ...clients);
+  });
 
-    host.close();
-    for (const v of [...viewers, extra.viewer]) v.close();
+  it("limita a fila de espera sem ocupar vagas de viewers", async () => {
+    const { host, code } = await createRoom();
+    const queued: TestClient[] = [];
+    for (let i = 0; i < MAX_PENDING; i++) queued.push((await requestJoin(host, code, `P${i}`)).viewer);
+
+    const extra = await TestClient.connect();
+    extra.send({ type: "join", code, name: "Extra" });
+    assert.equal(expectType(await extra.next(), "error").code, "room-full");
+    closeAll(host, extra, ...queued);
+  });
+
+  it("recusa automaticamente quem fica na fila sem resposta", async () => {
+    const { host, code } = await createRoom();
+    const { viewer, viewerId } = await requestJoin(host, code);
+
+    // pendingTimeoutMs = 1000 no servidor de teste.
+    assert.deepEqual(await viewer.next(), { type: "removed", reason: "rejected" });
+    assert.deepEqual(await host.next(), { type: "join-cancelled", peerId: viewerId });
+    closeAll(host, viewer);
+  });
+
+  it("saneia nomes de exibição", async () => {
+    const { host, code } = await createRoom();
+    const { viewer, name } = await requestJoin(host, code, "  Zé\n\u0007  da   Silva ");
+    assert.equal(name, "Zé da Silva");
+    closeAll(host, viewer);
+  });
+});
+
+describe("sanitizeName", () => {
+  it("corta no limite e usa padrão quando vazio", () => {
+    assert.equal(sanitizeName("x".repeat(50)).length, 32);
+    assert.equal(sanitizeName("   "), "Convidado");
+    assert.equal(sanitizeName(42), "Convidado");
   });
 });

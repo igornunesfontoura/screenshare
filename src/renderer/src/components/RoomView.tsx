@@ -1,34 +1,46 @@
 import { useState } from "react";
-import { Check, Copy, LogOut, MonitorPlay, Users } from "lucide-react";
+import { Check, Copy, LogOut, MonitorPlay, UserX, Users } from "lucide-react";
 import { MAX_VIEWERS, type PeerId } from "../../../../shared/protocol.ts";
 import type { UseCapture } from "../hooks/useCapture";
-import type { PeerStatus, RoomSession } from "../hooks/useRoom";
+import type { PeerStatus, RoomSession, UseRoom } from "../hooks/useRoom";
+import { ChatPanel } from "./ChatPanel";
 import { ConnectionBadge } from "./ConnectionBadge";
+import { JoinRequests } from "./JoinRequests";
+import { Player } from "./Player";
 import { SharePanel } from "./SharePanel";
 import { StatsLine } from "./StatsLine";
-import { VideoView } from "./VideoView";
 
 interface RoomViewProps {
   session: Extract<RoomSession, { status: "in-room" }>;
-  peers: Record<PeerId, PeerStatus>;
+  room: UseRoom;
   capture: UseCapture;
-  onLeave(): void;
 }
 
-export function RoomView({ session, peers, capture, onLeave }: RoomViewProps) {
+export function RoomView({ session, room, capture }: RoomViewProps) {
   const isHost = session.role === "host";
 
   return (
-    <div className="m-auto w-full max-w-4xl space-y-6">
-      <RoomHeader code={session.code} isHost={isHost} onLeave={onLeave} />
-      {isHost ? (
-        <>
-          <SharePanel capture={capture} />
-          <ViewerList peers={peers} />
-        </>
-      ) : (
-        <HostStream status={peers[session.hostId]} />
-      )}
+    <div className="m-auto grid w-full max-w-7xl gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
+      <div className="min-w-0 space-y-6">
+        <RoomHeader code={session.code} isHost={isHost} onLeave={room.leave} />
+        {isHost ? (
+          <>
+            <JoinRequests requests={room.requests} onAdmit={room.admit} onReject={room.reject} />
+            <SharePanel capture={capture} />
+            <ViewerList peers={room.peers} onKick={room.kick} />
+          </>
+        ) : (
+          <HostStream hostName={session.hostName} status={room.peers[session.hostId]} />
+        )}
+      </div>
+      <aside className="lg:sticky lg:top-0 lg:h-[calc(100vh-10rem)]">
+        <ChatPanel
+          messages={room.messages}
+          selfId={session.selfId}
+          hostId={session.hostId}
+          onSend={room.sendChat}
+        />
+      </aside>
     </div>
   );
 }
@@ -74,7 +86,7 @@ function RoomHeader({ code, isHost, onLeave }: { code: string; isHost: boolean; 
   );
 }
 
-function ViewerList({ peers }: { peers: Record<PeerId, PeerStatus> }) {
+function ViewerList({ peers, onKick }: { peers: Record<PeerId, PeerStatus>; onKick(id: PeerId): void }) {
   const viewers = Object.entries(peers);
 
   return (
@@ -96,11 +108,22 @@ function ViewerList({ peers }: { peers: Record<PeerId, PeerStatus> }) {
         <ul className="divide-y divide-border">
           {viewers.map(([id, status]) => (
             <li key={id} className="flex flex-wrap items-center justify-between gap-2 py-3">
-              <div className="flex flex-col gap-0.5">
-                <span className="font-mono text-sm text-slate-300">{id.slice(0, 8)}</span>
+              <div className="flex min-w-0 flex-col gap-0.5">
+                <span className="truncate text-sm text-slate-200">{status.name || id.slice(0, 8)}</span>
                 <StatsLine stats={status.stats} />
               </div>
-              <ConnectionBadge status={status} />
+              <div className="flex items-center gap-2">
+                <ConnectionBadge status={status} />
+                <button
+                  type="button"
+                  onClick={() => onKick(id)}
+                  aria-label={`Remover ${status.name}`}
+                  title="Remover da sala"
+                  className="rounded-lg p-1.5 text-slate-500 transition hover:bg-red-500/10 hover:text-red-300"
+                >
+                  <UserX className="h-4 w-4" />
+                </button>
+              </div>
             </li>
           ))}
         </ul>
@@ -109,34 +132,27 @@ function ViewerList({ peers }: { peers: Record<PeerId, PeerStatus> }) {
   );
 }
 
-function HostStream({ status }: { status: PeerStatus | undefined }) {
-  const showVideo = Boolean(status?.live && status.stream);
+function HostStream({ hostName, status }: { hostName: string; status: PeerStatus | undefined }) {
+  const live = Boolean(status?.live && status.stream);
+  const placeholder = live
+    ? null
+    : status?.state === "connected"
+      ? `${hostName} ainda não está compartilhando a tela.`
+      : "Conectando ao host…";
 
   return (
     <section className="rounded-xl border border-border bg-surface p-6">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <h2 className="flex items-center gap-2 font-semibold">
           <MonitorPlay className="h-5 w-5 text-cyan-400" />
-          Transmissão
+          Tela de {hostName}
         </h2>
         {status && <ConnectionBadge status={status} />}
       </div>
-      <div className="aspect-video overflow-hidden rounded-lg border border-border">
-        {showVideo ? (
-          <VideoView stream={status!.stream} />
-        ) : (
-          <div className="flex h-full items-center justify-center text-sm text-slate-500">
-            {status?.state === "connected"
-              ? "O host ainda não está compartilhando a tela."
-              : "Conectando ao host…"}
-          </div>
-        )}
-      </div>
-      {showVideo && (
-        <div className="mt-3">
-          <StatsLine stats={status!.stats} />
-        </div>
-      )}
+      <Player stream={live ? status!.stream : null} stats={status?.stats ?? null} placeholder={placeholder} />
+      <p className="mt-3 text-xs text-slate-500">
+        Atalhos: F tela cheia · M mudo · P picture-in-picture · I estatísticas · duplo clique para tela cheia
+      </p>
     </section>
   );
 }
