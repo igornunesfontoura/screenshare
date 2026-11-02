@@ -1,0 +1,20 @@
+appId: com.screenshare.app
+productName: ScreenShare
+directories:
+  buildResources: build
+  output: release/${version}
+files:
+  - out/**/*
+  - package.json
+linux:
+  target: [AppImage, deb]
+  category: Video
+  executableName: screenshare
+  icon: build/icon.png
+  synopsis: Compartilhamento de tela P2P em alta qualidade
+win:
+  target: [nsis, portable]
+  icon: build/icon.ico
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true

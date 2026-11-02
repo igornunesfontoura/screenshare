@@ -10,7 +10,13 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
+out
+release
 *.local
+.env
+
+# Estado de ferramentas de IA
+.omc
 
 # Editor directories and files
 .vscode/*

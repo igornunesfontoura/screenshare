@@ -1,7 +1,7 @@
 # CLAUDE.md - Project Specification & AI Architecture Guide
 
 ## 1. Project Overview & Vision
-**StreamForge Desktop** is a high-performance, cross-platform (Windows & Linux) P2P screen sharing and movie watch-party application. It is designed to solve the common issues with mainstream apps like Discord (DRM black screens, low FPS/resolution limits, audio desync, and hardware acceleration locks).
+**ScreenShare** is a high-performance, cross-platform (Windows & Linux) P2P screen sharing and movie watch-party application. It is designed to solve the common issues with mainstream apps like Discord (DRM black screens, low FPS/resolution limits, audio desync, and hardware acceleration locks).
 
 ### Primary Goals:
 * **Native Desktop App:** Linux (AppImage/Debian/Flatpak) and Windows (MSI/Portable executable).
@@ -15,10 +15,10 @@
 
 | Layer | Technology Choice | Rationale |
 | :--- | :--- | :--- |
-| **Framework** | **Tauri v2** (or **Electron**) | **Tauri v2** recommended for lightweight memory footprint (<50MB RAM), fast Rust performance, and native OS API bindings (PipeWire/WASAPI). |
+| **Framework** | **Electron** (via `electron-vite`) | Chromium ships full WebRTC, `getDisplayMedia` over PipeWire on Wayland, Windows system-audio loopback and NVENC/VAAPI encoding. Tauri v2 was tried first and dropped: WebKitGTK on Linux (e.g. Arch's `webkit2gtk-4.1`) is built without WebRTC — `RTCPeerConnection` is undefined even with `enable-webrtc` set. |
 | **Frontend UI** | **React** / **Svelte** + **Tailwind CSS** + **Lucide Icons** | Fast, modern, responsive Dark Mode techwear UI. |
-| **P2P Protocol** | **WebRTC** (via `rust-webrtc` or WebRTC Native DataChannels) | Direct P2P connection to minimize latency and avoid central relay server bandwidth bottlenecks. |
-| **Signaling Server** | **Node.js WebSocket / PeerJS Server** | Simple light signaling server hosted on Render/Railway/Fly.io or self-hosted. |
+| **P2P Protocol** | **WebRTC** (Chromium's built-in stack in the renderer) | Direct P2P connection to minimize latency and avoid central relay server bandwidth bottlenecks. |
+| **Signaling Server** | **Node.js WebSocket** (`ws`, in `server/`) | Simple light signaling server hosted on Render/Railway/Fly.io or self-hosted. |
 | **Audio Capture** | **WASAPI (Windows)** / **PulseAudio/PipeWire (Linux)** | Low-level system audio loopback capture. |
 
 ---
@@ -54,28 +54,38 @@
 
 ## 4. Development Commands & Workflow
 
-If using **Tauri + React + Vite**:
+Stack: **Electron + electron-vite + React + Vite**. Node 24.2+ is required (the signaling server runs `.ts` directly with Node's type stripping).
 
 ### Setup & Installation
 ```bash
 npm install
-# Install system dependencies on Linux (Ubuntu/Debian)
-sudo apt update && sudo apt install -y libwebkit2gtk-4.1-dev build-essential curl wget file libssl-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev pipewire-audio-client-libraries
+npm --prefix server install
 ```
 
 ### Local Development
 ```bash
-npm run tauri dev
+npm run signal   # signaling server on ws://localhost:8787
+npm run dev      # Electron app with HMR (renderer console is mirrored to this terminal)
+```
+
+### Checks
+```bash
+npm run typecheck     # main/preload + renderer
+npm run test:server   # signaling server tests (node:test)
 ```
 
 ### Build & Package (Cross-Platform)
 ```bash
-# Build for Linux (AppImage & deb)
-npm run tauri build -- --target x86_64-unknown-linux-gnu
-
-# Build for Windows (x64 Installer / Portable)
-npm run tauri build -- --target x86_64-pc-windows-msvc
+npm run dist:linux   # AppImage + deb  → release/<version>/
+npm run dist:win     # NSIS installer + portable .exe
 ```
+
+### Layout
+* `src/main/` — Electron main process; native capture lives in `src/main/media/`.
+* `src/preload/` — `contextBridge` exposing `window.screenshare` (must build to CJS, sandbox is on).
+* `src/renderer/` — React UI, WebRTC (`lib/peer.ts`) and signaling client (`lib/signaling.ts`).
+* `shared/` — types shared across processes and the server (`protocol.ts`, `platform.ts`).
+* `server/` — standalone signaling server (own `package.json`, deployable on its own).
 
 ---
 
@@ -88,7 +98,8 @@ npm run tauri build -- --target x86_64-pc-windows-msvc
 
 ### Code Style Guidelines
 * **TypeScript / React:** Use functional components, explicit typing for WebRTC PeerConnections and MediaStreams.
-* **Rust Backend (if Tauri):** Keep system capture logic inside `src-tauri/src/media/` and communicate with UI via Tauri `invoke` commands and events.
+* **Main process:** Keep system capture logic inside `src/main/media/` and talk to the UI only through IPC channels declared in `shared/platform.ts` and exposed by the preload bridge. Keep `contextIsolation` and `sandbox` on.
+* **Server:** Only erasable TypeScript syntax (no enums, no constructor parameter properties) — it runs on Node type stripping, enforced by `erasableSyntaxOnly`.
 * **CSS/UI:** Use Tailwind utility classes. Color scheme: Dark Cyberpunk / Slate (#090d16 background, Emerald/Cyan highlights).
 
 ---
@@ -98,7 +109,7 @@ npm run tauri build -- --target x86_64-pc-windows-msvc
 When prompting Claude Code to build this project step-by-step, use the following sequence:
 
 1. **Phase 1: Project Scaffolding**
-   * Setup Tauri v2 + React + Tailwind CSS template configured for Windows & Linux.
+   * Setup Electron + React + Tailwind CSS template configured for Windows & Linux.
 2. **Phase 2: Signaling & WebRTC P2P Infrastructure**
    * Build room code system and WebRTC handshake logic (SDP offer/answer + ICE candidates).
 3. **Phase 3: Screen & Audio Capture Implementation**
@@ -106,4 +117,4 @@ When prompting Claude Code to build this project step-by-step, use the following
 4. **Phase 4: Player UI & Control Panel**
    * Create stream viewer, fullscreen toggle, audio meters, chat sidebar, and stream quality settings.
 5. **Phase 5: Packaging & Testing**
-   * Configure Tauri bundler for Linux AppImage and Windows `.exe`.
+   * Configure electron-builder for Linux AppImage/deb and Windows `.exe`.
