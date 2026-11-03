@@ -31,7 +31,8 @@ before(async () => {
 });
 
 after(() => {
-  worker?.kill();
+  // Mata o grupo todo (wrangler + workerd); só o pai deixaria filhos segurando o runner.
+  if (worker?.pid) process.kill(-worker.pid, "SIGTERM");
   if (!wss) return;
   for (const ws of wss.clients) ws.terminate();
   wss.close();
@@ -45,7 +46,11 @@ async function startWorker(): Promise<string> {
       "wrangler", "dev", "--port", String(port), "--ip", "127.0.0.1",
       "--var", "PENDING_TIMEOUT_MS:1000", "--var", "JOINS_PER_MINUTE:1000",
     ],
-    { cwd: import.meta.dirname, env: { ...process.env, WRANGLER_SEND_METRICS: "false" } },
+    {
+      cwd: import.meta.dirname,
+      env: { ...process.env, WRANGLER_SEND_METRICS: "false" },
+      detached: true,
+    },
   );
   let output = "";
   await new Promise<void>((resolve, reject) => {
