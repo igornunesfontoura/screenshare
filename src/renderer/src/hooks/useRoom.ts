@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ClientMessage, PeerId, Role, ServerMessage } from "../../../../shared/protocol.ts";
 import { ChatRateLimiter, appendMessage, cleanChatText, type ChatMessage } from "../lib/chat";
 import { PeerLink, type SendParams } from "../lib/peer";
-import { SignalingClient } from "../lib/signaling";
+import { SIGNALING_URL, SignalingClient } from "../lib/signaling";
 import { VoiceMixer } from "../lib/voice";
 import type { MediaStats } from "../lib/stats";
 
@@ -39,8 +39,6 @@ export type RoomSession =
       selfName: string;
       hostId: PeerId;
       hostName: string;
-      // Servidor de signaling em uso, exibido na sala.
-      server: string;
     };
 
 export interface UseRoom {
@@ -49,8 +47,8 @@ export interface UseRoom {
   requests: JoinRequest[];
   messages: ChatMessage[];
   error: string | null;
-  createRoom(name: string, serverUrl: string): Promise<void>;
-  joinRoom(code: string, name: string, serverUrl: string): Promise<void>;
+  createRoom(name: string): Promise<void>;
+  joinRoom(code: string, name: string): Promise<void>;
   admit(peerId: PeerId): void;
   reject(peerId: PeerId): void;
   kick(peerId: PeerId): void;
@@ -98,7 +96,6 @@ export function useRoom(outgoing: OutgoingMedia, voice: VoiceInput): UseRoom {
   const kicked = useRef(new Set<PeerId>());
   // O servidor não é confiável: o host só abre conexão com quem ele mesmo aprovou.
   const admitted = useRef(new Set<PeerId>());
-  const server = useRef("");
   const chatLimiter = useRef(new ChatRateLimiter());
   // Incrementa a cada teardown; eventos de sockets de tentativas antigas são ignorados.
   const generation = useRef(0);
@@ -236,7 +233,6 @@ export function useRoom(outgoing: OutgoingMedia, voice: VoiceInput): UseRoom {
             selfName: message.name,
             hostId: message.peerId,
             hostName: message.name,
-            server: server.current,
           });
           return;
         case "waiting":
@@ -254,7 +250,6 @@ export function useRoom(outgoing: OutgoingMedia, voice: VoiceInput): UseRoom {
             selfName: message.name,
             hostId: message.hostId,
             hostName: message.hostName,
-            server: server.current,
           });
           ensureLink(message.hostId);
           return;
@@ -305,15 +300,14 @@ export function useRoom(outgoing: OutgoingMedia, voice: VoiceInput): UseRoom {
   );
 
   const connect = useCallback(
-    async (as: Role, serverUrl: string, first: ClientMessage) => {
+    async (as: Role, first: ClientMessage) => {
       teardown(null);
-      server.current = serverUrl;
       const attempt = generation.current;
       const isCurrent = () => attempt === generation.current;
       role.current = as;
       setSession({ status: "connecting", role: as });
       try {
-        const client = await SignalingClient.connect(serverUrl, {
+        const client = await SignalingClient.connect(SIGNALING_URL, {
           onMessage: (message) => {
             if (isCurrent()) handleMessage(message);
           },
@@ -336,12 +330,11 @@ export function useRoom(outgoing: OutgoingMedia, voice: VoiceInput): UseRoom {
   );
 
   const createRoom = useCallback(
-    (name: string, serverUrl: string) => connect("host", serverUrl, { type: "create", name }),
+    (name: string) => connect("host", { type: "create", name }),
     [connect],
   );
   const joinRoom = useCallback(
-    (code: string, name: string, serverUrl: string) =>
-      connect("viewer", serverUrl, { type: "join", code, name }),
+    (code: string, name: string) => connect("viewer", { type: "join", code, name }),
     [connect],
   );
 

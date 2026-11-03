@@ -5,7 +5,7 @@ import { MAX_VIEWERS, type PeerId } from "../../../../shared/protocol.ts";
 import type { UseCapture } from "../hooks/useCapture";
 import type { UseVoice } from "../hooks/useVoice";
 import type { PeerStatus, RoomSession, UseRoom } from "../hooks/useRoom";
-import { serverLabel } from "../lib/signaling";
+import { SIGNALING_URL } from "../lib/signaling";
 import { ChatPanel } from "./ChatPanel";
 import { ConnectionBadge } from "./ConnectionBadge";
 import { JoinRequests } from "./JoinRequests";
@@ -38,7 +38,6 @@ export function RoomView({
       <div className="min-w-0 space-y-6">
         <RoomHeader
           code={session.code}
-          serverUrl={session.server}
           isHost={isHost}
           onLeave={room.leave}
         />
@@ -67,14 +66,13 @@ export function RoomView({
 
 interface RoomHeaderProps {
   code: string;
-  serverUrl: string;
   isHost: boolean;
   onLeave(): void;
 }
 
-function RoomHeader({ code, serverUrl, isHost, onLeave }: RoomHeaderProps) {
+function RoomHeader({ code, isHost, onLeave }: RoomHeaderProps) {
   const [copied, setCopied] = useState<"code" | "invite" | null>(null);
-  const invite = inviteLink(serverUrl, code);
+  const invite = inviteLink(SIGNALING_URL, code);
 
   async function copy(what: "code" | "invite", text: string) {
     try {
@@ -110,7 +108,6 @@ function RoomHeader({ code, serverUrl, isHost, onLeave }: RoomHeaderProps) {
             )}
           </button>
         </div>
-        <p className="mt-1 font-mono text-xs text-slate-500">via {serverLabel(serverUrl)}</p>
       </div>
       <div className="flex flex-wrap gap-2">
         {invite && (
