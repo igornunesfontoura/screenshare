@@ -14,6 +14,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.node.json --composite false && tsc --noEmit -p tsconfig.web.json --composite false",
     "dist:linux": "npm run build && electron-builder --linux",
     "dist:win": "npm run build && electron-builder --win",
+    "release": "npm version patch -m \"release: v%s\" && git push --follow-tags",
     "signal": "npm --prefix server start",
     "test:server": "npm --prefix server test",
     "test": "node --test shared/*.test.ts src/main/**/*.test.ts && npm --prefix server test",
@@ -37,5 +38,8 @@
   },
   "allowScripts": {
     "electron-winstaller": false
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.11"
   }
 }

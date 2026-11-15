@@ -34,11 +34,17 @@ jobs:
           - os: ubuntu-latest
             dist: --linux
             app: release/*/linux-unpacked/screenshare
-            artifact: release/*/*.AppImage
+            # latest*.yml e .blockmap são o que o electron-updater do app lê.
+            artifact: |
+              release/*/*.AppImage
+              release/*/latest-linux.yml
           - os: windows-latest
             dist: --win
             app: release/*/win-unpacked/ScreenShare.exe
-            artifact: release/*/*.exe
+            artifact: |
+              release/*/*.exe
+              release/*/*.exe.blockmap
+              release/*/latest.yml
     runs-on: ${{ matrix.os }}
     # Um app travado no smoke test não pode segurar o runner por horas.
     timeout-minutes: 20
@@ -72,3 +78,29 @@ jobs:
           name: screenshare-${{ runner.os }}
           path: ${{ matrix.artifact }}
           if-no-files-found: error
+
+  # Tag v* (npm run release) publica a versão; os apps instalados a baixam sozinhos.
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: package
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      # O updater compara a versão do latest.yml (package.json) com a do app.
+      - name: Tag must match package.json version
+        run: test "v$(node -p 'require("./package.json").version')" = "$GITHUB_REF_NAME"
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - run: ls -la dist
+      # Sem os manifestos a release sai, mas nenhum app instalado se atualiza.
+      - name: Check updater files
+        run: test -f dist/latest.yml && test -f dist/latest-linux.yml && ls dist/*.AppImage dist/*Setup*.exe dist/*Portatil*.exe
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --title "ScreenShare $GITHUB_REF_NAME" --generate-notes

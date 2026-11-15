@@ -92,6 +92,11 @@ npm run dist:win     # NSIS installer + portable .exe
 * `scripts/smoke.mjs` launches a packaged build with `--remote-debugging-port` and checks title, preload bridge, version and first render. CI runs it on Linux (xvfb, AppArmor userns relaxed for the Chromium sandbox) and Windows.
 * The signaling server URL is fixed per build (`VITE_SIGNALING_URL`; no server picker in the UI by design); the server ships as a Docker image (`server/Dockerfile`, build context = repo root) and handles SIGTERM as PID 1.
 
+### Releases & auto-update
+* `npm run release` (clean tree on `main`) bumps the patch version, tags `v<version>` and pushes; CI then publishes a GitHub release (repo is public) with the NSIS installer, portable `.exe`, AppImage, `latest*.yml` and blockmaps. Download page for friends: `https://github.com/igornunesfontoura/screenshare/releases/latest`.
+* `src/main/updater.ts` (`electron-updater`, `publish` in `electron-builder.yml`): the NSIS install and the AppImage download updates in the background and install on quit or via the header button (disabled while in a room). The portable `.exe` can't replace itself — it only shows a link to the release page. Checks at startup and every 4 h; packaged builds only.
+* Artifact names have no spaces (GitHub rewrites them and `latest.yml` would stop matching). The tag must equal `package.json` version (CI checks).
+
 ### Hosted signaling & invites
 * Release builds point to the Cloudflare Workers deployment (`server/worker.ts`, `server/wrangler.jsonc`, URL in `.env.production`). One Durable Object (`idFromName("global")`) holds every room in memory — no hibernation API, so state lives while sockets are open and the object is evicted (no quota used) when idle. Free plan requires `new_sqlite_classes`.
 * Message handling is transport-agnostic in `server/handler.ts`, shared by the Node server and the worker; `rooms.ts` uses Web Crypto (not `node:crypto`) so it runs on both. `npm --prefix server run test:worker` runs the same tests against `wrangler dev`.

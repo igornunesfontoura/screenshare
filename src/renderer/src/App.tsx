@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Cpu, Radio } from "lucide-react";
 import { Home } from "./components/Home";
 import { RoomView } from "./components/RoomView";
+import { UpdateNotice } from "./components/UpdateNotice";
 import { useCapture } from "./hooks/useCapture";
 import { usePersistentState } from "./hooks/usePersistentState";
 import { useVoice } from "./hooks/useVoice";
@@ -45,11 +46,14 @@ function App() {
             Screen<span className="text-cyan-400">Share</span>
           </span>
         </div>
-        <div className="flex items-center gap-2 text-xs text-slate-400">
-          <Cpu className="h-4 w-4" />
-          {platform
-            ? `${platform.os} · ${platform.arch} · ${platform.captureBackend}`
-            : "modo navegador"}
+        <div className="flex items-center gap-4">
+          <UpdateNotice inRoom={inRoom} />
+          <div className="flex items-center gap-2 text-xs text-slate-400">
+            <Cpu className="h-4 w-4" />
+            {platform
+              ? `${platform.os} · ${platform.arch} · ${platform.captureBackend}`
+              : "modo navegador"}
+          </div>
         </div>
       </header>
 

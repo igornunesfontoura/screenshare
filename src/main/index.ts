@@ -1,6 +1,7 @@
 import { app, BrowserWindow, session, shell } from "electron";
 import { join } from "node:path";
 import { registerMediaIpc } from "./media/index.ts";
+import { startAutoUpdate } from "./updater.ts";
 
 function createWindow(): void {
   const window = new BrowserWindow({
@@ -72,6 +73,7 @@ app.whenReady().then(() => {
     ALLOWED_PERMISSIONS.has(permission),
   );
   registerMediaIpc();
+  startAutoUpdate();
   createWindow();
 
   app.on("activate", () => {
