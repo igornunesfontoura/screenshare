@@ -22,20 +22,19 @@ const workletFile = readdirSync(new URL("../out/renderer/assets/", import.meta.u
 // Worklet do áudio PCM (helper do Windows): carrega pelo mesmo caminho do app empacotado
 // (file://), recebe amostras por um MessagePort e precisa produzir som.
 const PCM_CHECK = `(async () => {
-  const ctx = new AudioContext({ sampleRate: 48000 });
+  // OfflineAudioContext: os runners do CI não têm saída de som, e um AudioContext
+  // sem dispositivo não avança o relógio.
+  const ctx = new OfflineAudioContext(2, 9600, 48000);
   await ctx.audioWorklet.addModule(new URL("assets/${workletFile}", location.href));
   const node = new AudioWorkletNode(ctx, "pcm-player", { numberOfInputs: 0, outputChannelCount: [2] });
-  const analyser = ctx.createAnalyser();
-  node.connect(analyser);
+  node.connect(ctx.destination);
   const channel = new MessageChannel();
   node.port.postMessage({ port: channel.port2 }, [channel.port2]);
-  await ctx.resume();
   for (let i = 0; i < 30; i++) channel.port1.postMessage(new Float32Array(960).fill(0.5));
+  // As mensagens precisam chegar ao worklet antes da renderização.
   await new Promise((r) => setTimeout(r, 300));
-  const data = new Float32Array(analyser.fftSize);
-  analyser.getFloatTimeDomainData(data);
-  await ctx.close();
-  return Math.max(...data);
+  const rendered = await ctx.startRendering();
+  return Math.max(...rendered.getChannelData(0), ...rendered.getChannelData(1));
 })().catch((e) => String(e))`;
 
 const app = spawn(executable, [`--remote-debugging-port=${PORT}`], { stdio: "ignore" });
