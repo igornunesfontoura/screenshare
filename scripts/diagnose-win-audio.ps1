@@ -28,36 +28,43 @@ if (-not $exe) {
   Log "Helper: $exe"
   Log ""
   Log "== Apps com áudio (sessions) =="
+  Log "(lista vazia = o helper não está vendo nenhum app tocando)"
   $sessions = & $exe sessions --own-pid 0 2>&1
   Log ($sessions | Out-String).Trim()
   Log "código de saída: $LASTEXITCODE"
 
   Log ""
   Log "== Captura de 5 segundos (capture) =="
-  $raw = Join-Path $env:TEMP "ss-audio.raw"
-  $err = Join-Path $env:TEMP "ss-audio.err"
-  Remove-Item $raw, $err -ErrorAction SilentlyContinue
-  $p = Start-Process $exe -ArgumentList "capture --own-pid 0" -RedirectStandardOutput $raw `
-    -RedirectStandardError $err -PassThru -NoNewWindow
+  # Lido como o app lê: stdout consumido sem parar e stdin aberto (EOF encerra o helper).
+  $psi = New-Object System.Diagnostics.ProcessStartInfo $exe, "capture --own-pid 0"
+  $psi.UseShellExecute = $false
+  $psi.CreateNoWindow = $true
+  $psi.RedirectStandardOutput = $true
+  $psi.RedirectStandardError = $true
+  $psi.RedirectStandardInput = $true
+  $proc = [Diagnostics.Process]::Start($psi)
+  $proc.StandardInput.WriteLine('{"blocked":[]}')
+  $proc.StandardInput.Flush()
+  $memory = New-Object IO.MemoryStream
+  $copy = $proc.StandardOutput.BaseStream.CopyToAsync($memory)
+  $errTask = $proc.StandardError.ReadToEndAsync()
   Start-Sleep 5
-  Stop-Process $p -ErrorAction SilentlyContinue
-  Start-Sleep 1
-  $errors = if (Test-Path $err) { (Get-Content $err | Out-String).Trim() } else { "" }
+  $proc.StandardInput.Close()
+  if (-not $proc.WaitForExit(3000)) { $proc.Kill(); Log "helper não encerrou com o fim do stdin (foi finalizado)" }
+  [void]$copy.Wait(3000)
+  [void]$errTask.Wait(3000)
+  $errors = "$($errTask.Result)".Trim()
   Log ("erros do helper: " + $(if ($errors) { "`n$errors" } else { "(nenhum)" }))
 
-  if (Test-Path $raw) {
-    $bytes = [IO.File]::ReadAllBytes($raw)
-    $max = 0.0; $loud = 0; $samples = 0
-    for ($i = 0; $i + 4 -le $bytes.Length; $i += 400) {
-      $v = [Math]::Abs([BitConverter]::ToSingle($bytes, $i)); $samples++
-      if ($v -gt $max) { $max = $v }
-      if ($v -gt 0.001) { $loud++ }
-    }
-    Log "bytes: $($bytes.Length) (esperado ~1.900.000 em 5 s)"
-    Log ("pico: {0:N4} | amostras com som: {1} de {2}" -f $max, $loud, $samples)
-  } else {
-    Log "nenhum áudio foi escrito pelo helper"
+  $bytes = $memory.ToArray()
+  $max = 0.0; $loud = 0; $samples = 0
+  for ($i = 0; $i + 4 -le $bytes.Length; $i += 40) {
+    $v = [Math]::Abs([BitConverter]::ToSingle($bytes, $i)); $samples++
+    if ($v -gt $max) { $max = $v }
+    if ($v -gt 0.001) { $loud++ }
   }
+  Log "bytes: $($bytes.Length) (esperado ~1.900.000 em 5 s)"
+  Log ("pico: {0:N4} | amostras com som: {1} de {2}" -f $max, $loud, $samples)
 }
 
 $report = Join-Path ([Environment]::GetFolderPath("Desktop")) "screenshare-diagnostico.txt"
