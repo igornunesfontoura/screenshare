@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ClientMessage, PeerId, Role, ServerMessage } from "../../../../shared/protocol.ts";
 import { ChatRateLimiter, appendMessage, cleanChatText, type ChatMessage } from "../lib/chat";
-import { PeerLink, type SendParams } from "../lib/peer";
+import type { CameraLayout } from "../lib/camera";
+import { PeerLink, type RemoteCamera, type SendParams } from "../lib/peer";
 import { SIGNALING_URL, SignalingClient } from "../lib/signaling";
 import { VoiceMixer } from "../lib/voice";
 import type { MediaStats } from "../lib/stats";
@@ -14,6 +15,8 @@ export interface PeerStatus {
   // Só no viewer: o que chega do host.
   stream: MediaStream | null;
   live: boolean;
+  // Só no viewer: webcam sobreposta do host.
+  camera: RemoteCamera | null;
 }
 
 export interface JoinRequest {
@@ -25,6 +28,9 @@ export interface JoinRequest {
 export interface OutgoingMedia {
   stream: MediaStream | null;
   params: SendParams;
+  // Webcam sobreposta à tela (null = desligada).
+  camera: MediaStreamTrack | null;
+  cameraLayout: CameraLayout;
 }
 
 export type RoomSession =
@@ -64,6 +70,7 @@ const EMPTY_PEER: PeerStatus = {
   stats: null,
   stream: null,
   live: false,
+  camera: null,
 };
 
 const REMOVED_REASONS = {
@@ -192,6 +199,7 @@ export function useRoom(outgoing: OutgoingMedia, voice: VoiceInput): UseRoom {
         onStats: (stats) => updatePeer(id, { stats }),
         onRemoteStream: (stream) => updatePeer(id, { stream }),
         onRemoteLive: (live) => updatePeer(id, { live }),
+        onRemoteCamera: (camera) => updatePeer(id, { camera }),
         onRemoteVoice: (track) => getMixer().addRemote(id, track),
         onChatSend: (text) => {
           const name = names.current.get(id);
@@ -211,8 +219,10 @@ export function useRoom(outgoing: OutgoingMedia, voice: VoiceInput): UseRoom {
       link.setVoiceTrack(
         role.current === "host" ? getMixer().outputFor(id) : voiceRef.current.micTrack,
       );
-      if (role.current === "host" && outgoingRef.current.stream) {
-        void link.setLocalStream(outgoingRef.current.stream, outgoingRef.current.params);
+      if (role.current === "host") {
+        const media = outgoingRef.current;
+        if (media.stream) void link.setLocalStream(media.stream, media.params);
+        void link.setCamera(media.camera, media.cameraLayout);
       }
       return link;
     },
@@ -373,11 +383,20 @@ export function useRoom(outgoing: OutgoingMedia, voice: VoiceInput): UseRoom {
 
   const leave = useCallback(() => teardown(null), [teardown]);
 
+  // Stream principal e webcam mudam separadamente: mexer na webcam (ou no canto
+  // dela) não pode reaplicar o stream da tela.
+  const { stream: outStream, params: outParams, camera: outCamera, cameraLayout: outLayout } = outgoing;
   useEffect(() => {
     outgoingRef.current = outgoing;
-    if (role.current !== "host") return;
-    for (const link of links.current.values()) void link.setLocalStream(outgoing.stream, outgoing.params);
   }, [outgoing]);
+  useEffect(() => {
+    if (role.current !== "host") return;
+    for (const link of links.current.values()) void link.setLocalStream(outStream, outParams);
+  }, [outStream, outParams]);
+  useEffect(() => {
+    if (role.current !== "host") return;
+    for (const link of links.current.values()) void link.setCamera(outCamera, outLayout);
+  }, [outCamera, outLayout]);
 
   useEffect(() => {
     voiceRef.current = voice;

@@ -8,6 +8,7 @@ import {
   type CaptureSettings,
   type CaptureSource,
 } from "../lib/capture";
+import { OVERLAY_CAPTURE, describeCameraError, openCamera } from "../lib/camera";
 import type { SendParams } from "../lib/peer";
 import type { OutgoingMedia } from "./useRoom";
 
@@ -16,6 +17,8 @@ export type CaptureStatus = "idle" | "picking" | "starting" | "live";
 export interface UseCapture {
   status: CaptureStatus;
   stream: MediaStream | null;
+  // Webcam sobreposta à tela, quando ligada (no modo "só webcam" ela é o próprio stream).
+  cameraTrack: MediaStreamTrack | null;
   sources: CaptureSource[];
   settings: CaptureSettings;
   error: string | null;
@@ -33,6 +36,9 @@ export function useCapture(): UseCapture {
   const [sources, setSources] = useState<CaptureSource[]>([]);
   const [settings, setSettings] = useState<CaptureSettings>(DEFAULT_SETTINGS);
   const [error, setError] = useState<string | null>(null);
+  const [cameraTrack, setCameraTrack] = useState<MediaStreamTrack | null>(null);
+  // Erro da webcam sobreposta, separado para não apagar avisos da captura.
+  const [cameraError, setCameraError] = useState<string | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   // Incrementa a cada stop; capturas que terminam depois disso são descartadas.
   const generation = useRef(0);
@@ -45,6 +51,7 @@ export function useCapture(): UseCapture {
     streamRef.current = null;
     setStream(null);
     setSources([]);
+    setCameraError(null);
     setStatus("idle");
   }, []);
 
@@ -77,7 +84,7 @@ export function useCapture(): UseCapture {
       } catch (err) {
         if (attempt !== generation.current) return;
         stop();
-        setError(describeError(err));
+        setError(settings.source === "camera" ? describeCameraError(err) : describeError(err));
       }
     },
     [settings, stop],
@@ -90,6 +97,8 @@ export function useCapture(): UseCapture {
     setStatus("starting");
     setError(null);
     try {
+      // Só webcam: não há tela para escolher.
+      if (settings.source === "camera") return start(null);
       const listing = await listSources();
       if (listing.picker === "system") return start(null);
       setSources(listing.sources);
@@ -99,7 +108,7 @@ export function useCapture(): UseCapture {
       setStatus("idle");
       setError(describeError(err));
     }
-  }, [start]);
+  }, [settings.source, start]);
 
   const cancelPicking = useCallback(() => {
     busy.current = false;
@@ -116,7 +125,8 @@ export function useCapture(): UseCapture {
     const video = stream?.getVideoTracks()[0];
     if (!video) return;
     const { width, height } = RESOLUTIONS[settings.resolution];
-    video.contentHint = settings.content;
+    // A webcam principal mantém o "motion" do openCamera.
+    if (settings.source === "screen") video.contentHint = settings.content;
     video
       .applyConstraints({
         width: { ideal: width, max: width },
@@ -124,7 +134,39 @@ export function useCapture(): UseCapture {
         frameRate: { ideal: settings.fps, max: settings.fps },
       })
       .catch((err: unknown) => console.warn("Falha ao aplicar resolução/FPS", err));
-  }, [stream, settings.resolution, settings.fps, settings.content]);
+  }, [stream, settings.resolution, settings.fps, settings.content, settings.source]);
+
+  // Webcam sobreposta: abre/fecha ao vivo conforme a opção, sem recapturar a tela.
+  const wantsOverlay = status === "live" && settings.source === "screen" && settings.cameraOverlay;
+  useEffect(() => {
+    if (!wantsOverlay) return;
+    let cancelled = false;
+    let opened: MediaStreamTrack | null = null;
+    openCamera(settings.cameraId, OVERLAY_CAPTURE)
+      .then((track) => {
+        if (cancelled) return track.stop();
+        opened = track;
+        // Câmera desconectada no meio da transmissão: desmarca a opção, senão ela
+        // ficaria "ligada" sem câmera e sem como tentar de novo.
+        track.addEventListener("ended", () => {
+          setCameraTrack((t) => (t === track ? null : t));
+          setCameraError("A webcam foi desconectada.");
+          setSettings((prev) => ({ ...prev, cameraOverlay: false }));
+        });
+        setCameraError(null);
+        setCameraTrack(track);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setCameraError(describeCameraError(err));
+        setSettings((prev) => ({ ...prev, cameraOverlay: false }));
+      });
+    return () => {
+      cancelled = true;
+      opened?.stop();
+      setCameraTrack(null);
+    };
+  }, [wantsOverlay, settings.cameraId]);
 
   useEffect(() => stop, [stop]);
 
@@ -136,14 +178,18 @@ export function useCapture(): UseCapture {
     }),
     [settings.bitrateMbps, settings.fps, settings.content],
   );
-  const outgoing = useMemo<OutgoingMedia>(() => ({ stream, params }), [stream, params]);
+  const outgoing = useMemo<OutgoingMedia>(
+    () => ({ stream, params, camera: cameraTrack, cameraLayout: settings.cameraLayout }),
+    [stream, params, cameraTrack, settings.cameraLayout],
+  );
 
   return {
     status,
     stream,
+    cameraTrack,
     sources,
     settings,
-    error,
+    error: [error, cameraError].filter(Boolean).join(" ") || null,
     outgoing,
     updateSettings,
     begin,

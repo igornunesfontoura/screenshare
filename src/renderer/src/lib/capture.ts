@@ -4,11 +4,14 @@ import {
   type CaptureSource,
   type SourceListing,
 } from "../../../../shared/platform.ts";
+import { DEFAULT_LAYOUT, openCamera, type CameraLayout } from "./camera";
 import pcmWorkletUrl from "./pcm-worklet.ts?worker&url";
 import { bridge } from "./platform";
 
 export type Resolution = "720p" | "1080p" | "1440p" | "2160p";
 export type ContentKind = "motion" | "detail";
+// screen: tela/janela (com webcam sobreposta opcional); camera: só a webcam.
+export type VideoSource = "screen" | "camera";
 
 export interface CaptureSettings {
   resolution: Resolution;
@@ -17,6 +20,12 @@ export interface CaptureSettings {
   // motion: filmes/jogos (prioriza fluidez); detail: texto/apps (prioriza nitidez).
   content: ContentKind;
   systemAudio: boolean;
+  source: VideoSource;
+  // null: câmera padrão do sistema.
+  cameraId: string | null;
+  // Só com source "screen": webcam sobreposta, liga/desliga ao vivo.
+  cameraOverlay: boolean;
+  cameraLayout: CameraLayout;
 }
 
 export const DEFAULT_SETTINGS: CaptureSettings = {
@@ -25,6 +34,10 @@ export const DEFAULT_SETTINGS: CaptureSettings = {
   bitrateMbps: 8,
   content: "motion",
   systemAudio: true,
+  source: "screen",
+  cameraId: null,
+  cameraOverlay: false,
+  cameraLayout: DEFAULT_LAYOUT,
 };
 
 export const RESOLUTIONS: Record<Resolution, { width: number; height: number; label: string }> = {
@@ -36,7 +49,7 @@ export const RESOLUTIONS: Record<Resolution, { width: number; height: number; la
 
 export const BITRATE_RANGE = { min: 2, max: 50 } as const;
 
-export type QualitySettings = Omit<CaptureSettings, "systemAudio">;
+export type QualitySettings = Pick<CaptureSettings, "resolution" | "fps" | "bitrateMbps" | "content">;
 
 export const QUALITY_PRESETS: { id: string; label: string; hint: string; settings: QualitySettings }[] = [
   {
@@ -97,6 +110,13 @@ export async function startCapture(
   settings: CaptureSettings,
 ): Promise<StartedCapture> {
   const { width, height } = RESOLUTIONS[settings.resolution];
+  if (settings.source === "camera") {
+    const video = await openCamera(settings.cameraId, { width, height, fps: settings.fps });
+    const stream = new MediaStream([video]);
+    // addSystemAudio não rejeita: falhas de áudio viram aviso.
+    return { stream, warning: await addSystemAudio(stream, settings.systemAudio) };
+  }
+
   const { audioViaDisplayMedia } = await bridge().prepareCapture({
     sourceId,
     systemAudio: settings.systemAudio,
@@ -115,8 +135,14 @@ export async function startCapture(
   const [video] = stream.getVideoTracks();
   video.contentHint = settings.content;
 
+  const warning = await addSystemAudio(stream, settings.systemAudio && !audioViaDisplayMedia);
+  return { stream, warning };
+}
+
+// Junta o áudio do sistema ao stream; devolve um aviso se ele foi pedido e falhou.
+async function addSystemAudio(stream: MediaStream, wanted: boolean): Promise<string | null> {
   let warning: string | null = null;
-  if (settings.systemAudio && !audioViaDisplayMedia) {
+  if (wanted) {
     try {
       const audio = await captureSystemAudio();
       if (audio) stream.addTrack(audio);
@@ -127,11 +153,9 @@ export async function startCapture(
       warning = "Falha ao capturar o áudio do sistema; transmitindo só o vídeo.";
     }
   }
-
   // Sem isto o WebRTC trata a trilha como voz (processamento e codificação de fala).
   for (const audio of stream.getAudioTracks()) audio.contentHint = "music";
-
-  return { stream, warning };
+  return warning;
 }
 
 export function stopCapture(stream: MediaStream): void {

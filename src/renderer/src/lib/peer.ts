@@ -1,5 +1,6 @@
 import type { Role, SignalPayload } from "../../../../shared/protocol.ts";
 import { enableOpusStereo } from "../../../../shared/sdp.ts";
+import { OVERLAY_SEND, isCameraLayout, type CameraLayout } from "./camera";
 import { cleanChatText, isChatMessage, type ChatMessage } from "./chat";
 import { iceServers } from "./ice";
 import { StatsSampler, type MediaStats } from "./stats";
@@ -24,7 +25,15 @@ type ControlMessage =
   | { t: "live"; live: boolean }
   // viewer → host: o host carimba autor/hora e repassa a todos como "chat".
   | { t: "chat-send"; text: string }
-  | { t: "chat"; message: ChatMessage };
+  | { t: "chat"; message: ChatMessage }
+  // host → viewer: webcam sobreposta (visível ou não) e onde desenhá-la.
+  | { t: "camera"; visible: boolean; layout: CameraLayout };
+
+// Webcam sobreposta recebida pelo viewer.
+export interface RemoteCamera {
+  track: MediaStreamTrack;
+  layout: CameraLayout;
+}
 
 export interface SendParams {
   maxBitrate: number;
@@ -39,6 +48,8 @@ export interface PeerLinkEvents {
   onStats(stats: MediaStats): void;
   onRemoteStream(stream: MediaStream): void;
   onRemoteLive(live: boolean): void;
+  // Viewer: webcam sobreposta do host (null = sem webcam).
+  onRemoteCamera(camera: RemoteCamera | null): void;
   // Voz recebida pelo transceiver de voz (host: microfone do viewer; viewer: mixagem do host).
   onRemoteVoice(track: MediaStreamTrack): void;
   // Host: texto enviado por este viewer. Viewer: mensagem repassada pelo host.
@@ -63,12 +74,22 @@ export class PeerLink {
   // Host: um transceiver por tipo, reaproveitado entre transmissões (replaceTrack).
   private video: RTCRtpTransceiver | null = null;
   private audio: RTCRtpTransceiver | null = null;
+  // Webcam sobreposta: sempre criada depois de `video`, então no viewer ela é o
+  // segundo transceiver de vídeo (o primeiro é a tela ou a webcam principal).
+  private camera: RTCRtpTransceiver | null = null;
+  private cameraTrack: MediaStreamTrack | null = null;
+  private cameraLayout: CameraLayout | null = null;
   private sendParams: SendParams | null = null;
   private live = false;
   private mediaQueue: Promise<void> = Promise.resolve();
 
   // Viewer: tracks recebidas do host.
   private remoteTracks = new Map<string, MediaStreamTrack>();
+  private remoteCamera: { track: MediaStreamTrack | null; visible: boolean; layout: CameraLayout | null } = {
+    track: null,
+    visible: false,
+    layout: null,
+  };
 
   // Voz nos dois sentidos. O host cria este transceiver primeiro (m-line 0) em modo
   // sendrecv; o viewer o adota na primeira offer. Assim o viewer transmite o microfone
@@ -99,6 +120,11 @@ export class PeerLink {
       }
       if (role === "viewer") {
         (transceiver.receiver as ReceiverWithTarget).jitterBufferTarget = MEDIA_JITTER_BUFFER_MS;
+        if (track.kind === "video" && this.videoTransceivers().indexOf(transceiver) === 1) {
+          this.remoteCamera.track = track;
+          this.emitRemoteCamera();
+          return;
+        }
         this.remoteTracks.set(track.kind, track);
         events.onRemoteStream(new MediaStream([...this.remoteTracks.values()]));
       }
@@ -119,7 +145,7 @@ export class PeerLink {
     this.statsTimer = window.setInterval(() => {
       if (this.pc.connectionState !== "connected") return;
       this.stats
-        .sample(this.pc)
+        .sample(this.pc, this.mainVideoMid())
         .then((stats) => stats && events.onStats(stats))
         .catch(() => undefined);
     }, STATS_INTERVAL_MS);
@@ -131,6 +157,16 @@ export class PeerLink {
     this.mediaQueue = this.mediaQueue
       .then(() => this.applyLocalStream(stream, params))
       .catch((err: unknown) => console.error("Falha ao trocar a mídia enviada", err));
+    return this.mediaQueue;
+  }
+
+  // Host: webcam sobreposta à tela (null = desligada) e onde os viewers a desenham.
+  setCamera(track: MediaStreamTrack | null, layout: CameraLayout): Promise<void> {
+    this.cameraTrack = track;
+    this.cameraLayout = layout;
+    this.mediaQueue = this.mediaQueue
+      .then(() => this.applyCamera())
+      .catch((err: unknown) => console.error("Falha ao trocar a webcam enviada", err));
     return this.mediaQueue;
   }
 
@@ -212,6 +248,58 @@ export class PeerLink {
     await this.applySendParams();
     this.live = Boolean(videoTrack);
     this.sendControl({ t: "live", live: this.live });
+    await this.applyCamera();
+  }
+
+  // A webcam sobreposta só existe junto da transmissão principal: o transceiver dela
+  // nasce depois do vídeo principal, o que fixa a ordem que o viewer usa para separá-los.
+  private async applyCamera(): Promise<void> {
+    const track = this.live ? this.cameraTrack : null;
+    if (this.video) {
+      if (!this.camera && track) {
+        this.camera = this.pc.addTransceiver(track, { direction: "sendonly", streams: [new MediaStream([track])] });
+      } else if (this.camera && this.camera.sender.track !== track) {
+        await this.camera.sender.replaceTrack(track);
+      }
+      if (this.camera && track) await this.setCameraParameters(this.camera.sender);
+    }
+    this.sendCameraState();
+  }
+
+  private async setCameraParameters(sender: RTCRtpSender): Promise<void> {
+    try {
+      const params = sender.getParameters();
+      if (!params.encodings.length) return;
+      const encoding = params.encodings[0] as PrioritizedEncoding;
+      encoding.maxBitrate = OVERLAY_SEND.maxBitrate;
+      encoding.maxFramerate = OVERLAY_SEND.maxFramerate;
+      // Em congestionamento, a tela e o som vêm antes da webcam.
+      encoding.priority = "low";
+      encoding.networkPriority = "low";
+      await sender.setParameters(params);
+    } catch (err) {
+      console.warn("Falha ao aplicar bitrate da webcam", err);
+    }
+  }
+
+  private sendCameraState(): void {
+    if (this.role !== "host" || !this.cameraLayout) return;
+    const visible = Boolean(this.live && this.cameraTrack && this.camera);
+    this.sendControl({ t: "camera", visible, layout: this.cameraLayout });
+  }
+
+  private videoTransceivers(): RTCRtpTransceiver[] {
+    return this.pc.getTransceivers().filter((t) => t.receiver.track.kind === "video");
+  }
+
+  // mid do vídeo principal, para as estatísticas não lerem a webcam sobreposta.
+  private mainVideoMid(): string | null {
+    return (this.role === "host" ? this.video?.mid : this.videoTransceivers()[0]?.mid) ?? null;
+  }
+
+  private emitRemoteCamera(): void {
+    const { track, visible, layout } = this.remoteCamera;
+    this.events.onRemoteCamera(track && visible && layout ? { track, layout } : null);
   }
 
   private async attachTrack(
@@ -241,6 +329,8 @@ export class PeerLink {
   private async setSendParameters(): Promise<void> {
     const params = this.sendParams;
     if (!params) return;
+
+    if (this.camera?.sender.track) await this.setCameraParameters(this.camera.sender);
 
     const videoSender = this.video?.sender;
     if (videoSender?.track) {
@@ -284,7 +374,10 @@ export class PeerLink {
   private attachControl(channel: RTCDataChannel): void {
     this.control = channel;
     channel.onopen = () => {
-      if (this.role === "host") this.sendControl({ t: "live", live: this.live });
+      if (this.role === "host") {
+        this.sendControl({ t: "live", live: this.live });
+        this.sendCameraState();
+      }
       this.events.onControlOpen();
       this.pingTimer = window.setInterval(() => {
         this.sendControl({ t: "ping", ts: performance.now() });
@@ -307,6 +400,12 @@ export class PeerLink {
           return;
         case "live":
           if (this.role === "viewer") this.events.onRemoteLive(message.live === true);
+          return;
+        case "camera":
+          if (this.role !== "viewer" || !isCameraLayout(message.layout)) return;
+          this.remoteCamera.visible = message.visible === true;
+          this.remoteCamera.layout = message.layout;
+          this.emitRemoteCamera();
           return;
         case "chat-send": {
           const text = cleanChatText(message.text);

@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   Activity,
+  Camera,
+  CameraOff,
   Maximize,
   Minimize,
   PictureInPicture2,
@@ -8,8 +10,10 @@ import {
   VolumeX,
 } from "lucide-react";
 import { usePersistentState } from "../hooks/usePersistentState";
+import type { RemoteCamera } from "../lib/peer";
 import type { MediaStats } from "../lib/stats";
 import { AudioMeter } from "./AudioMeter";
+import { CameraOverlay } from "./CameraOverlay";
 import { StatsLine } from "./StatsLine";
 
 const HIDE_CONTROLS_MS = 2500;
@@ -18,11 +22,13 @@ interface PlayerProps {
   stream: MediaStream | null;
   stats: MediaStats | null;
   placeholder: string | null;
+  // Webcam sobreposta pelo host (null = sem webcam).
+  camera?: RemoteCamera | null;
 }
 
 // Player do viewer: tela cheia, PiP, volume e estatísticas.
-// Atalhos: F tela cheia, M mudo, P picture-in-picture, I estatísticas.
-export function Player({ stream, stats, placeholder }: PlayerProps) {
+// Atalhos: F tela cheia, M mudo, P picture-in-picture, I estatísticas, C webcam.
+export function Player({ stream, stats, placeholder, camera = null }: PlayerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const hideTimer = useRef<number | undefined>(undefined);
@@ -31,6 +37,8 @@ export function Player({ stream, stats, placeholder }: PlayerProps) {
   const volume = Number.isFinite(storedVolume) ? Math.min(1, Math.max(0, storedVolume)) : 1;
   const [muted, setMuted] = useState(false);
   const [showStats, setShowStats] = useState(false);
+  // O viewer pode esconder a webcam do host (vale para esta sessão).
+  const [showCamera, setShowCamera] = useState(true);
   const [fullscreen, setFullscreen] = useState(false);
   const [controlsVisible, setControlsVisible] = useState(true);
   // Aviso curto quando tela cheia ou PiP são recusados (antes falhavam calados).
@@ -101,6 +109,7 @@ export function Player({ stream, stats, placeholder }: PlayerProps) {
         m: toggleMute,
         p: togglePip,
         i: () => setShowStats((s) => !s),
+        c: () => setShowCamera((s) => !s),
       };
       const action = actions[event.key.toLowerCase()];
       if (action) {
@@ -142,6 +151,8 @@ export function Player({ stream, stats, placeholder }: PlayerProps) {
       } ${controlsVisible ? "" : "cursor-none"}`}
     >
       <video ref={videoRef} autoPlay playsInline className="h-full w-full object-contain" />
+
+      {camera && showCamera && !placeholder && <CameraOverlay track={camera.track} layout={camera.layout} />}
 
       {placeholder && (
         <div className="absolute inset-0 flex items-center justify-center bg-surface text-sm text-slate-500">
@@ -187,6 +198,15 @@ export function Player({ stream, stats, placeholder }: PlayerProps) {
         />
         <AudioMeter stream={stream} label="Nível do áudio recebido" className="w-20" />
         <div className="flex-1" />
+        {camera && (
+          <ControlButton
+            label={showCamera ? "Esconder webcam (C)" : "Mostrar webcam (C)"}
+            onClick={() => setShowCamera((s) => !s)}
+            active={showCamera}
+          >
+            {showCamera ? <Camera className="h-5 w-5" /> : <CameraOff className="h-5 w-5" />}
+          </ControlButton>
+        )}
         <ControlButton label="Estatísticas (I)" onClick={() => setShowStats((s) => !s)} active={showStats}>
           <Activity className="h-5 w-5" />
         </ControlButton>

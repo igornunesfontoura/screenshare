@@ -185,7 +185,7 @@ function HostStream({ hostName, status }: { hostName: string; status: PeerStatus
   const placeholder = live
     ? null
     : status?.state === "connected"
-      ? `${hostName} ainda não está compartilhando a tela.`
+      ? `${hostName} ainda não começou a transmitir.`
       : "Conectando ao host…";
 
   return (
@@ -193,13 +193,18 @@ function HostStream({ hostName, status }: { hostName: string; status: PeerStatus
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <h2 className="flex items-center gap-2 font-semibold">
           <MonitorPlay className="h-5 w-5 text-cyan-400" />
-          Tela de {hostName}
+          Transmissão de {hostName}
         </h2>
         {status && <ConnectionBadge status={status} />}
       </div>
-      <Player stream={live ? status!.stream : null} stats={status?.stats ?? null} placeholder={placeholder} />
+      <Player
+        stream={live ? status!.stream : null}
+        stats={status?.stats ?? null}
+        placeholder={placeholder}
+        camera={status?.camera ?? null}
+      />
       <p className="mt-3 text-xs text-slate-500">
-        Atalhos: F tela cheia · M mudo · P picture-in-picture · I estatísticas · duplo clique para tela cheia
+        Atalhos: F tela cheia · M mudo · P picture-in-picture · I estatísticas · C webcam · duplo clique para tela cheia
       </p>
     </section>
   );

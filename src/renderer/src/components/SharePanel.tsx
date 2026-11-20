@@ -10,6 +10,8 @@ import {
   type Resolution,
 } from "../lib/capture";
 import { AudioAppsPicker } from "./AudioAppsPicker";
+import { CameraOverlay } from "./CameraOverlay";
+import { CameraSettings } from "./CameraSettings";
 import { AudioMeter } from "./AudioMeter";
 import { SourcePicker } from "./SourcePicker";
 import { VideoView } from "./VideoView";
@@ -49,7 +51,7 @@ export function SharePanel({ capture }: { capture: UseCapture }) {
             className="flex items-center gap-2 rounded-lg bg-emerald-500 px-4 py-2 text-sm font-medium text-void transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-40"
           >
             {busy && <Loader2 className="h-4 w-4 animate-spin" />}
-            Compartilhar tela
+            {settings.source === "camera" ? "Transmitir webcam" : "Compartilhar tela"}
           </button>
         )}
       </div>
@@ -63,8 +65,9 @@ export function SharePanel({ capture }: { capture: UseCapture }) {
 
       {live && (
         <div className="mb-4 space-y-2">
-          <div className="aspect-video overflow-hidden rounded-lg border border-border">
+          <div className="relative aspect-video overflow-hidden rounded-lg border border-border">
             <VideoView stream={capture.stream} muted />
+            {capture.cameraTrack && <CameraOverlay track={capture.cameraTrack} layout={settings.cameraLayout} />}
           </div>
           {capture.stream?.getAudioTracks().length ? (
             <div className="flex items-center gap-3 text-xs text-slate-400">
@@ -74,6 +77,8 @@ export function SharePanel({ capture }: { capture: UseCapture }) {
           ) : null}
         </div>
       )}
+
+      <CameraSettings capture={capture} />
 
       <fieldset className="mb-4">
         <legend className="mb-2 text-sm text-slate-400">Qualidade</legend>

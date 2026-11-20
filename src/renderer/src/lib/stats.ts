@@ -23,7 +23,7 @@ type RtpStats = RTCStats & Record<string, unknown>;
 // Lê o RTP de vídeo (enviado pelo host ou recebido pelo viewer) e calcula o bitrate
 // a partir da diferença de bytes entre duas amostras.
 export class StatsSampler {
-  private last: { bytes: number; timestamp: number } | null = null;
+  private last: { id: string; bytes: number; timestamp: number } | null = null;
   private lastAudio: { lost: number; received: number; concealed: number; samples: number } | null =
     null;
   private readonly direction: "outbound-rtp" | "inbound-rtp";
@@ -64,21 +64,28 @@ export class StatsSampler {
     };
   }
 
-  async sample(pc: RTCPeerConnection): Promise<MediaStats | null> {
+  // videoMid: o vídeo principal (há outro quando a webcam vai sobreposta).
+  async sample(pc: RTCPeerConnection, videoMid: string | null = null): Promise<MediaStats | null> {
     const report = await pc.getStats();
     let rtp: RtpStats | undefined;
+    let any: RtpStats | undefined;
     report.forEach((stat: RtpStats) => {
-      if (stat.type === this.direction && stat.kind === "video") rtp = stat;
+      if (stat.type !== this.direction || stat.kind !== "video") return;
+      any = stat;
+      if (stat.mid === videoMid) rtp = stat;
     });
+    // Sem mid no relatório (ou sem webcam), vale o único vídeo que houver.
+    rtp ??= any;
     if (!rtp) return null;
 
     const bytesKey = this.direction === "outbound-rtp" ? "bytesSent" : "bytesReceived";
     const bytes = Number(rtp[bytesKey] ?? 0);
     const kbps =
-      this.last && rtp.timestamp > this.last.timestamp
+      // Outro vídeo que na amostra anterior (fallback sem mid): sem diferença válida.
+      this.last && this.last.id === rtp.id && rtp.timestamp > this.last.timestamp
         ? Math.round(((bytes - this.last.bytes) * 8) / (rtp.timestamp - this.last.timestamp))
         : null;
-    this.last = { bytes, timestamp: rtp.timestamp };
+    this.last = { id: rtp.id, bytes, timestamp: rtp.timestamp };
 
     const codec = report.get(rtp.codecId as string) as RtpStats | undefined;
     const outbound = this.direction === "outbound-rtp";
