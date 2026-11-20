@@ -23,6 +23,16 @@ npm run test:win-audio # lógica do helper de áudio do Windows (cargo)
 npm run smoke:linux    # abre o app empacotado e confere ponte, versão e tela inicial
 ```
 
+## Diagnóstico do áudio no Windows
+
+Se a transmissão de um host Windows sai sem som, deixe algo tocando e rode no PowerShell (Menu Iniciar → "PowerShell"; colar com o botão direito):
+
+```powershell
+irm https://raw.githubusercontent.com/igornunesfontoura/screenshare/main/scripts/diagnose-win-audio.ps1 | iex
+```
+
+Ou baixe [`scripts/diagnose-win-audio.cmd`](scripts/diagnose-win-audio.cmd) e dê dois cliques. O resultado vai para `screenshare-diagnostico.txt` na Área de Trabalho (e para a área de transferência). O script só testa o helper de áudio (`screenshare-audio.exe`), não altera nada.
+
 ## Pacotes
 
 ```bash
