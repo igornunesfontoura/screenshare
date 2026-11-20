@@ -137,7 +137,10 @@ unsafe fn activate_process_loopback(pid: u32) -> Result<IAudioClient> {
             },
         },
     };
-    let variant = PROPVARIANT {
+    // ManuallyDrop: o Drop do PROPVARIANT chama PropVariantClear, que para VT_BLOB faz
+    // CoTaskMemFree do pBlobData; aqui ele aponta para `params` na pilha, e liberar isso
+    // corrompe o heap e derruba o helper logo depois de a captura ativar.
+    let variant = std::mem::ManuallyDrop::new(PROPVARIANT {
         Anonymous: PROPVARIANT_0 {
             Anonymous: std::mem::ManuallyDrop::new(PROPVARIANT_0_0 {
                 vt: VT_BLOB,
@@ -150,7 +153,7 @@ unsafe fn activate_process_loopback(pid: u32) -> Result<IAudioClient> {
                 ..Default::default()
             }),
         },
-    };
+    });
 
     let done = CreateEventW(None, false, false, None)?;
     let handler: IActivateAudioInterfaceCompletionHandler = ActivationHandler { done }.into();
@@ -158,7 +161,7 @@ unsafe fn activate_process_loopback(pid: u32) -> Result<IAudioClient> {
         let operation = ActivateAudioInterfaceAsync(
             VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
             &IAudioClient::IID,
-            Some(&variant),
+            Some(&*variant),
             &handler,
         )?;
         if WaitForSingleObject(done, ACTIVATE_TIMEOUT_MS) != WAIT_OBJECT_0 {

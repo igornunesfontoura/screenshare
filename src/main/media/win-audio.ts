@@ -118,10 +118,12 @@ export async function startWinSystemAudio(target: WebContents): Promise<boolean>
   port = channel.port1;
   target.postMessage(IPC.pcmPort, null, [channel.port2]);
 
-  child.once("exit", (code) => {
+  child.once("exit", (code, signal) => {
     if (helper !== child) return;
-    console.warn(`Helper de áudio encerrou (código ${code})`);
+    const reason = `helper de áudio encerrou (${signal ?? `código ${code}`})`;
+    console.warn(reason);
     stopWinSystemAudio();
+    if (!target.isDestroyed()) target.send(IPC.systemAudioStopped, reason);
   });
   return true;
 }

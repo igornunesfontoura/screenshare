@@ -51,6 +51,8 @@ if (-not $exe) {
   Start-Sleep 5
   $proc.StandardInput.Close()
   if (-not $proc.WaitForExit(3000)) { $proc.Kill(); Log "helper não encerrou com o fim do stdin (foi finalizado)" }
+  # 0 = encerrou normalmente; -1073741819 (0xC0000005) ou -1073740940 (0xC0000374) = crash.
+  Log ("código de saída do capture: {0} (0x{0:X8})" -f $proc.ExitCode)
   [void]$copy.Wait(3000)
   [void]$errTask.Wait(3000)
   $errors = "$($errTask.Result)".Trim()

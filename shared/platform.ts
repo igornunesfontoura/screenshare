@@ -71,6 +71,9 @@ export interface ScreenShareBridge {
   listAudioApps(): Promise<AudioAppListing>;
   // Apps fora da transmissão; vale na hora, inclusive ao vivo.
   setBlockedAudioApps(ids: string[]): Promise<void>;
+  // O áudio do sistema parou sozinho no meio da transmissão (ex.: helper do Windows
+  // encerrou). Devolve a função que cancela a inscrição.
+  onSystemAudioStopped(listener: (reason: string) => void): () => void;
   updateStatus(): Promise<UpdateStatus>;
   // Devolve a função que cancela a inscrição.
   onUpdateStatus(listener: (status: UpdateStatus) => void): () => void;
@@ -87,6 +90,7 @@ export const IPC = {
   listAudioApps: "media:list-audio-apps",
   setBlockedAudioApps: "media:set-blocked-audio-apps",
   pcmPort: "media:pcm-port",
+  systemAudioStopped: "media:system-audio-stopped",
   updateStatus: "update:status",
   updateStatusChanged: "update:status-changed",
   installUpdate: "update:install",

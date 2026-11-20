@@ -9,6 +9,11 @@ const bridge: ScreenShareBridge = {
   stopSystemAudio: () => ipcRenderer.invoke(IPC.stopSystemAudio),
   listAudioApps: () => ipcRenderer.invoke(IPC.listAudioApps),
   setBlockedAudioApps: (ids) => ipcRenderer.invoke(IPC.setBlockedAudioApps, ids),
+  onSystemAudioStopped: (listener) => {
+    const handler = (_event: IpcRendererEvent, reason: string) => listener(reason);
+    ipcRenderer.on(IPC.systemAudioStopped, handler);
+    return () => ipcRenderer.removeListener(IPC.systemAudioStopped, handler);
+  },
   updateStatus: () => ipcRenderer.invoke(IPC.updateStatus),
   onUpdateStatus: (listener) => {
     const handler = (_event: IpcRendererEvent, status: UpdateStatus) => listener(status);

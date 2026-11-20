@@ -10,6 +10,7 @@ import {
 } from "../lib/capture";
 import { OVERLAY_CAPTURE, describeCameraError, openCamera } from "../lib/camera";
 import type { SendParams } from "../lib/peer";
+import { bridge, hasBridge } from "../lib/platform";
 import type { OutgoingMedia } from "./useRoom";
 
 export type CaptureStatus = "idle" | "picking" | "starting" | "live";
@@ -135,6 +136,15 @@ export function useCapture(): UseCapture {
       })
       .catch((err: unknown) => console.warn("Falha ao aplicar resolução/FPS", err));
   }, [stream, settings.resolution, settings.fps, settings.content, settings.source]);
+
+  // O áudio do sistema pode cair no meio da transmissão (helper do Windows): o vídeo
+  // continua, mas o host precisa saber que está mudo.
+  useEffect(() => {
+    if (status !== "live" || !hasBridge()) return;
+    return bridge().onSystemAudioStopped((reason) => {
+      setError(`O áudio do sistema parou (${reason}); transmitindo só o vídeo.`);
+    });
+  }, [status]);
 
   // Webcam sobreposta: abre/fecha ao vivo conforme a opção, sem recapturar a tela.
   const wantsOverlay = status === "live" && settings.source === "screen" && settings.cameraOverlay;
