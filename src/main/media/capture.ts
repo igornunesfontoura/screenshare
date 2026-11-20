@@ -7,6 +7,7 @@ import type {
   PreparedCapture,
   SourceListing,
 } from "../../../shared/platform.ts";
+import { winHelperAvailable } from "./win-audio.ts";
 
 const THUMBNAIL_SIZE = { width: 320, height: 180 };
 // Um prepareCapture só autoriza o getDisplayMedia que vem logo em seguida.
@@ -44,7 +45,7 @@ export async function listCaptureSources(): Promise<SourceListing> {
 export function prepareCapture(input: unknown): PreparedCapture {
   const request = parseRequest(input);
   pendingRequest = { ...request, expiresAt: Date.now() + REQUEST_TTL_MS };
-  return { audioViaDisplayMedia: request.systemAudio && process.platform === "win32" };
+  return { audioViaDisplayMedia: request.systemAudio && loopbackViaChromium() };
 }
 
 function parseRequest(input: unknown): CaptureRequest {
@@ -53,6 +54,11 @@ function parseRequest(input: unknown): CaptureRequest {
     sourceId: typeof value.sourceId === "string" ? value.sourceId : null,
     systemAudio: value.systemAudio === true,
   };
+}
+
+// Windows sem o helper de áudio por app: loopback do sistema inteiro pelo Chromium.
+function loopbackViaChromium(): boolean {
+  return process.platform === "win32" && !winHelperAvailable();
 }
 
 export function registerDisplayMediaHandler(): void {
@@ -72,7 +78,7 @@ export function registerDisplayMediaHandler(): void {
 
       callback({
         video: source,
-        audio: request.systemAudio && process.platform === "win32" ? "loopback" : undefined,
+        audio: request.systemAudio && loopbackViaChromium() ? "loopback" : undefined,
       });
     } catch (err) {
       console.error("Falha ao obter a fonte de captura", err);

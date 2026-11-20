@@ -4,7 +4,7 @@ Compartilhamento de tela P2P e watch party para Linux e Windows, construído com
 
 ## Desenvolvimento
 
-Requer Node 24.2+. No Linux, o áudio do sistema usa `pactl` (pacote `pipewire-pulse` ou `libpulse`).
+Requer Node 24.2+. No Linux, o áudio do sistema usa `pactl` (pacote `pipewire-pulse` ou `libpulse`); a escolha de quais apps entram no áudio usa `pw-link`/`pw-dump` (PipeWire). No Windows, essa escolha usa o helper `native/win-audio` (Rust, Windows 10 2004+), compilado com `npm run build:win-audio`.
 
 ```bash
 npm install
@@ -19,6 +19,7 @@ npm run dev      # app Electron com HMR
 ```bash
 npm run typecheck
 npm test               # SDP + servidor de signaling
+npm run test:win-audio # lógica do helper de áudio do Windows (cargo)
 npm run smoke:linux    # abre o app empacotado e confere ponte, versão e tela inicial
 ```
 

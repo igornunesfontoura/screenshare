@@ -1,4 +1,10 @@
-import type { CaptureSource, SourceListing } from "../../../../shared/platform.ts";
+import {
+  PCM_PORT_MESSAGE,
+  PCM_SAMPLE_RATE,
+  type CaptureSource,
+  type SourceListing,
+} from "../../../../shared/platform.ts";
+import pcmWorkletUrl from "./pcm-worklet.ts?worker&url";
 import { bridge } from "./platform";
 
 export type Resolution = "720p" | "1080p" | "1440p" | "2160p";
@@ -66,6 +72,12 @@ export function matchesPreset(settings: CaptureSettings, preset: QualitySettings
 // O PipeWire publica a fonte remapeada de forma assíncrona após o pactl.
 const AUDIO_DEVICE_WAIT_MS = 2000;
 const AUDIO_DEVICE_POLL_MS = 100;
+// O main entrega o MessagePort do PCM antes de responder ao startSystemAudio; o prazo
+// só corre depois da resposta, então pode ser curto.
+const PCM_PORT_WAIT_MS = 1000;
+
+// Contexto que toca o PCM do helper do Windows; fechado junto com a captura.
+let pcmContext: AudioContext | null = null;
 
 export interface StartedCapture {
   stream: MediaStream;
@@ -124,14 +136,36 @@ export async function startCapture(
 
 export function stopCapture(stream: MediaStream): void {
   for (const track of stream.getTracks()) track.stop();
+  void pcmContext?.close();
+  pcmContext = null;
   void bridge().stopSystemAudio();
 }
 
 async function captureSystemAudio(): Promise<MediaStreamTrack | null> {
-  const label = await bridge().startSystemAudio();
-  if (!label) return null;
+  const port = waitForPcmPort();
+  const source = await bridge().startSystemAudio();
+  if (!source) {
+    port.cancel();
+    return null;
+  }
+  if (source.kind === "pcm") {
+    port.arm();
+    const received = await port.promise;
+    // Sem porta ou sem worklet o helper não pode ficar capturando à toa.
+    if (!received) {
+      void bridge().stopSystemAudio();
+      return null;
+    }
+    try {
+      return await playPcm(received);
+    } catch (err) {
+      void bridge().stopSystemAudio();
+      throw err;
+    }
+  }
+  port.cancel();
 
-  const device = await waitForAudioInput(label);
+  const device = await waitForAudioInput(source.label);
   if (!device) return null;
 
   const stream = await navigator.mediaDevices.getUserMedia({
@@ -146,6 +180,56 @@ async function captureSystemAudio(): Promise<MediaStreamTrack | null> {
     },
   });
   return stream.getAudioTracks()[0] ?? null;
+}
+
+// Escuta o MessagePort que o preload repassa por window.postMessage.
+// O listener entra antes do invoke; o prazo só é armado (arm) quando o main responde.
+function waitForPcmPort(): { promise: Promise<MessagePort | null>; arm(): void; cancel(): void } {
+  let finish: (port: MessagePort | null) => void = () => undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const promise = new Promise<MessagePort | null>((resolve) => {
+    const onMessage = (event: MessageEvent) => {
+      if (event.source !== window || event.data !== PCM_PORT_MESSAGE || !event.ports[0]) return;
+      finish(event.ports[0]);
+    };
+    finish = (port) => {
+      clearTimeout(timer);
+      window.removeEventListener("message", onMessage);
+      resolve(port);
+    };
+    window.addEventListener("message", onMessage);
+  });
+  return {
+    promise,
+    arm: () => {
+      timer = setTimeout(() => finish(null), PCM_PORT_WAIT_MS);
+    },
+    cancel: () => finish(null),
+  };
+}
+
+async function playPcm(port: MessagePort): Promise<MediaStreamTrack | null> {
+  void pcmContext?.close();
+  const context = new AudioContext({ sampleRate: PCM_SAMPLE_RATE, latencyHint: "interactive" });
+  pcmContext = context;
+  try {
+    await context.audioWorklet.addModule(pcmWorkletUrl);
+    const player = new AudioWorkletNode(context, "pcm-player", {
+      numberOfInputs: 0,
+      outputChannelCount: [2],
+    });
+    player.port.postMessage({ port }, [port]);
+    const destination = context.createMediaStreamDestination();
+    player.connect(destination);
+    // O contexto não toca em nenhuma saída, então pode nascer suspenso sem gesto.
+    await context.resume();
+    return destination.stream.getAudioTracks()[0] ?? null;
+  } catch (err) {
+    port.close();
+    void context.close();
+    if (pcmContext === context) pcmContext = null;
+    throw err;
+  }
 }
 
 async function waitForAudioInput(label: string): Promise<MediaDeviceInfo | null> {

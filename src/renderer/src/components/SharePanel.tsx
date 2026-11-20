@@ -1,4 +1,5 @@
 import { AlertTriangle, Loader2, MonitorUp, Square } from "lucide-react";
+import { useAudioApps } from "../hooks/useAudioApps";
 import type { UseCapture } from "../hooks/useCapture";
 import {
   BITRATE_RANGE,
@@ -8,6 +9,7 @@ import {
   type ContentKind,
   type Resolution,
 } from "../lib/capture";
+import { AudioAppsPicker } from "./AudioAppsPicker";
 import { AudioMeter } from "./AudioMeter";
 import { SourcePicker } from "./SourcePicker";
 import { VideoView } from "./VideoView";
@@ -16,6 +18,7 @@ export function SharePanel({ capture }: { capture: UseCapture }) {
   const { status, settings, updateSettings } = capture;
   const live = status === "live";
   const busy = status === "starting" || status === "picking";
+  const audioApps = useAudioApps(settings.systemAudio);
 
   return (
     <section className="rounded-xl border border-border bg-surface p-6">
@@ -161,6 +164,12 @@ export function SharePanel({ capture }: { capture: UseCapture }) {
           <span className={live ? "text-slate-500" : "text-slate-300"}>Áudio do sistema</span>
         </label>
       </div>
+
+      {settings.systemAudio && (
+        <div className="mt-4">
+          <AudioAppsPicker audioApps={audioApps} />
+        </div>
+      )}
 
       {status === "picking" && (
         <SourcePicker

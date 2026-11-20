@@ -28,6 +28,10 @@ appImage:
 win:
   target: [nsis, portable]
   icon: build/icon.ico
+  # Helper de áudio por app (native/win-audio), compilado com cargo antes do empacotamento.
+  extraResources:
+    - from: native/win-audio/target/release/screenshare-audio.exe
+      to: screenshare-audio.exe
 portable:
   artifactName: ScreenShare-Portatil-${version}.${ext}
 nsis:

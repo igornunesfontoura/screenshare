@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { planLinks } from "./linux-audio.ts";
+import { audioApps, planLinks } from "./linux-audio.ts";
 
 const node = (id: number, props: Record<string, unknown>) => ({
   id,
@@ -83,5 +83,38 @@ describe("planLinks", () => {
     const input = [node(6, { "media.class": "Stream/Input/Audio" }), port(60, 6, "output", "FL")];
     assert.deepEqual(planLinks([...SINK, ...input], OWN), { add: [], remove: [] });
     assert.deepEqual(planLinks(input, OWN), { add: [], remove: [] });
+  });
+
+  it("app bloqueado não é ligado e links existentes dele são desfeitos", () => {
+    const objects = [
+      ...SINK,
+      playback(2, { "application.process.binary": "chromium", "application.name": "Chromium" }),
+      port(20, 2, "output", "FL"),
+      playback(7, { "application.process.binary": "Discord", "application.name": "WEBRTC VoiceEngine" }),
+      port(70, 7, "output", "FL"),
+      port(71, 7, "output", "FR"),
+      link(70, 10),
+    ];
+    assert.deepEqual(planLinks(objects, OWN, new Set(["discord"])), {
+      add: [[20, 10]],
+      remove: [[70, 10]],
+    });
+  });
+});
+
+describe("audioApps", () => {
+  it("lista cada app uma vez, sem o próprio app, pelo binário e com o nome publicado", () => {
+    const objects = [
+      ...SINK,
+      playback(2, { "application.process.binary": "firefox", "application.name": "Firefox" }),
+      playback(3, { "application.process.binary": "firefox", "application.name": "Firefox" }),
+      playback(4, { "application.process.id": 42, "application.name": "ScreenShare" }),
+      playback(5, { "node.name": "mpv" }),
+      node(6, { "media.class": "Stream/Input/Audio", "application.name": "OBS" }),
+    ];
+    assert.deepEqual(audioApps(objects, OWN), [
+      { id: "firefox", name: "Firefox" },
+      { id: "mpv", name: "mpv" },
+    ]);
   });
 });

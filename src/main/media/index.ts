@@ -3,16 +3,27 @@
 import { app, ipcMain } from "electron";
 import {
   IPC,
+  type AudioAppListing,
   type CaptureBackend,
   type PlatformInfo,
+  type SystemAudioSource,
 } from "../../../shared/platform.ts";
 import { listCaptureSources, prepareCapture, registerDisplayMediaHandler } from "./capture.ts";
 import {
   type OwnAudio,
+  listLinuxAudioApps,
+  setLinuxBlockedApps,
   startLinuxSystemAudio,
   stopLinuxSystemAudio,
   stopLinuxSystemAudioSync,
 } from "./linux-audio.ts";
+import {
+  listWinAudioApps,
+  setWinBlockedApps,
+  startWinSystemAudio,
+  stopWinSystemAudio,
+  winHelperAvailable,
+} from "./win-audio.ts";
 
 // Identifica o áudio do próprio app (PIDs, incluindo o AudioService do Chromium, e
 // o nome), para a captura do sistema não pegar o que o ScreenShare toca (vozes do chat).
@@ -46,11 +57,35 @@ export function registerMediaIpc(): void {
   ipcMain.handle(IPC.listCaptureSources, () => listCaptureSources());
   ipcMain.handle(IPC.prepareCapture, (_event, request: unknown) => prepareCapture(request));
 
-  // No Windows o áudio vem pelo loopback do getDisplayMedia; só o Linux precisa disto.
-  ipcMain.handle(IPC.startSystemAudio, () =>
-    process.platform === "linux" ? startLinuxSystemAudio(ownAudio) : null,
+  ipcMain.handle(IPC.startSystemAudio, async (event): Promise<SystemAudioSource | null> => {
+    if (process.platform === "linux") {
+      const label = await startLinuxSystemAudio(ownAudio);
+      return label ? { kind: "device", label } : null;
+    }
+    // Sem o helper o áudio do Windows vem pelo loopback do getDisplayMedia.
+    if (winHelperAvailable()) return (await startWinSystemAudio(event.sender)) ? { kind: "pcm" } : null;
+    return null;
+  });
+  ipcMain.handle(IPC.stopSystemAudio, () =>
+    process.platform === "win32" ? stopWinSystemAudio() : stopLinuxSystemAudio(),
   );
-  ipcMain.handle(IPC.stopSystemAudio, () => stopLinuxSystemAudio());
+  ipcMain.handle(IPC.listAudioApps, async (): Promise<AudioAppListing> => {
+    try {
+      if (process.platform === "linux") return await listLinuxAudioApps(ownAudio);
+      if (process.platform === "win32") return await listWinAudioApps();
+    } catch (err) {
+      console.warn("Falha ao listar apps com áudio:", err);
+    }
+    return { supported: false, apps: [] };
+  });
+  ipcMain.handle(IPC.setBlockedAudioApps, (_event, ids: unknown) => {
+    const list = Array.isArray(ids) ? ids.filter((id): id is string => typeof id === "string") : [];
+    if (process.platform === "linux") setLinuxBlockedApps(list);
+    else if (process.platform === "win32") setWinBlockedApps(list);
+  });
 
-  app.on("will-quit", stopLinuxSystemAudioSync);
+  app.on("will-quit", () => {
+    stopLinuxSystemAudioSync();
+    stopWinSystemAudio();
+  });
 }

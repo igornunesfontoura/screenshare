@@ -22,6 +22,8 @@ jobs:
       - run: npm run typecheck
       - run: npm --prefix server run typecheck
       - run: npm test
+      # Lógica do helper de áudio do Windows (plano de captura e mixagem) roda em qualquer SO.
+      - run: npm run test:win-audio
       # Mesmos testes do signaling contra o worker.ts rodando no wrangler dev.
       - run: npm --prefix server run test:worker
 
@@ -56,6 +58,10 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
+      # O instalador do Windows leva o helper de áudio por app (extraResources).
+      - name: Build audio helper (Windows)
+        if: runner.os == 'Windows'
+        run: npm run build:win-audio
       - run: npx electron-builder ${{ matrix.dist }} --publish never
 
       # Ubuntu 24.04 bloqueia user namespaces via AppArmor, o que quebra o sandbox

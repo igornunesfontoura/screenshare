@@ -1,8 +1,9 @@
 // Smoke test do app empacotado: abre o executável, conecta pelo protocolo de
 // depuração do Chromium e confere título, ponte do preload e versão.
 //   node scripts/smoke.mjs release/0.1.0/linux-unpacked/screenshare
-import { spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 const PORT = 9333;
 const TIMEOUT_MS = 30_000;
@@ -13,6 +14,29 @@ if (!executable) {
   process.exit(2);
 }
 const { version } = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+// Mesmo build que foi empacotado (npm run build antes do electron-builder).
+const workletFile = readdirSync(new URL("../out/renderer/assets/", import.meta.url)).find((f) =>
+  /^pcm-worklet-.*\.js$/.test(f),
+);
+
+// Worklet do áudio PCM (helper do Windows): carrega pelo mesmo caminho do app empacotado
+// (file://), recebe amostras por um MessagePort e precisa produzir som.
+const PCM_CHECK = `(async () => {
+  const ctx = new AudioContext({ sampleRate: 48000 });
+  await ctx.audioWorklet.addModule(new URL("assets/${workletFile}", location.href));
+  const node = new AudioWorkletNode(ctx, "pcm-player", { numberOfInputs: 0, outputChannelCount: [2] });
+  const analyser = ctx.createAnalyser();
+  node.connect(analyser);
+  const channel = new MessageChannel();
+  node.port.postMessage({ port: channel.port2 }, [channel.port2]);
+  await ctx.resume();
+  for (let i = 0; i < 30; i++) channel.port1.postMessage(new Float32Array(960).fill(0.5));
+  await new Promise((r) => setTimeout(r, 300));
+  const data = new Float32Array(analyser.fftSize);
+  analyser.getFloatTimeDomainData(data);
+  await ctx.close();
+  return Math.max(...data);
+})().catch((e) => String(e))`;
 
 const app = spawn(executable, [`--remote-debugging-port=${PORT}`], { stdio: "ignore" });
 const deadline = Date.now() + TIMEOUT_MS;
@@ -111,6 +135,7 @@ try {
     "navigator.clipboard.writeText('smoke').then(() => true).catch((e) => String(e))",
     { userGesture: true },
   );
+  const pcmPeak = await evaluate(ws, PCM_CHECK, { userGesture: true });
   ws.close();
 
   const checks = [
@@ -120,7 +145,9 @@ try {
     ["tela inicial renderizada", rendered === true, rendered],
     ["tela cheia permitida", fullscreen === true, fullscreen],
     ["copiar para a área de transferência", clipboard === true, clipboard],
+    ["worklet do áudio PCM", typeof pcmPeak === "number" && pcmPeak > 0.4, pcmPeak],
   ];
+  if (process.platform === "win32") checks.push(...(await checkWinAudioHelper()));
   for (const [name, ok, detail] of checks) {
     console.log(`${ok ? "✔" : "✖"} ${name}: ${typeof detail === "string" ? detail : JSON.stringify(detail)}`);
     if (!ok) exitCode = 1;
@@ -132,3 +159,35 @@ try {
   app.kill();
 }
 process.exit(exitCode);
+
+// Helper de áudio por app (Windows): lista sessões e entrega PCM pelo stdout.
+async function checkWinAudioHelper() {
+  const helper = join(dirname(executable), "resources", "screenshare-audio.exe");
+  if (!existsSync(helper)) return [["helper de áudio empacotado", false, helper]];
+
+  let listing;
+  try {
+    listing = JSON.parse(execFileSync(helper, ["sessions", "--own-pid", "0"], { timeout: 10_000 }).toString());
+  } catch (err) {
+    listing = String(err);
+  }
+
+  const child = spawn(helper, ["capture", "--own-pid", "0"]);
+  child.stdin.write(`${JSON.stringify({ blocked: [] })}\n`);
+  let bytes = 0;
+  child.stdout.on("data", (chunk) => (bytes += chunk.length));
+  await sleep(2000);
+  const received = bytes;
+  // Fechar o stdin (app fechado) precisa encerrar o helper.
+  const exited = new Promise((resolve) => child.once("exit", () => resolve(true)));
+  child.stdin.end();
+  const closed = await Promise.race([exited, sleep(3000).then(() => false)]);
+  if (!closed) child.kill();
+
+  return [
+    ["helper lista sessões de áudio", Array.isArray(listing?.apps), listing],
+    // 10 ms = 3840 bytes; em 2 s espera-se bem mais de 100 blocos.
+    ["helper entrega PCM contínuo", received >= 3840 * 100, `${received} bytes em 2 s`],
+    ["helper encerra quando o app fecha", closed, closed],
+  ];
+}

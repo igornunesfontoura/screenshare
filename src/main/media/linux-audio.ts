@@ -5,11 +5,15 @@
 // que tocam no host não voltam para os espectadores. O sink é remapeado numa fonte
 // comum porque o Chromium esconde dispositivos "Monitor of …".
 //
+// O usuário pode tirar apps específicos da transmissão: eles são tratados como o
+// próprio app (sem link para o sink; links existentes são desfeitos).
+//
 // Sem as ferramentas do PipeWire (PulseAudio puro): remapeia o monitor da saída
-// padrão, que inclui o áudio do próprio app.
+// padrão, que inclui o áudio do próprio app e não permite filtrar por app.
 
 import { execFile, execFileSync } from "node:child_process";
 import { promisify } from "node:util";
+import type { AudioApp, AudioAppListing } from "../../../shared/platform.ts";
 
 const run = promisify(execFile);
 
@@ -22,6 +26,11 @@ const LINK_INTERVAL_MS = 1000;
 const DEFAULT_SINK_CHECKS = 5;
 // Par de portas que falha seguidamente (formato, permissão) deixa de ser tentado.
 const MAX_LINK_FAILURES = 3;
+
+// Apps cujo áudio o usuário tirou da transmissão (ids de `audioAppOf`).
+let blocked = new Set<string>();
+// Força uma sincronização fora do intervalo (ex.: o usuário bloqueou um app agora).
+let syncNow: (() => void) | null = null;
 
 // Como reconhecer o áudio do próprio app: PIDs do processo (inclui o AudioService do
 // Chromium) e o nome do app, que cobre PIDs de outro namespace (Flatpak).
@@ -40,6 +49,19 @@ let starting: Promise<string | null> | null = null;
 async function pactl(...args: string[]): Promise<string> {
   const { stdout } = await run("pactl", args);
   return stdout.trim();
+}
+
+export function setLinuxBlockedApps(ids: readonly string[]): void {
+  blocked = new Set(ids);
+  syncNow?.();
+}
+
+// Apps tocando áudio agora (exceto o próprio). `supported` é false sem as
+// ferramentas do PipeWire: aí a captura é o monitor da saída inteira, sem filtro.
+export async function listLinuxAudioApps(own: OwnAudioSource): Promise<AudioAppListing> {
+  if (!(await hasPipeWireTools())) return { supported: false, apps: [] };
+  const { stdout } = await run("pw-dump", [], { maxBuffer: 64 * 1024 * 1024 });
+  return { supported: true, apps: audioApps(JSON.parse(stdout) as PwObject[], own()) };
 }
 
 export function startLinuxSystemAudio(own: OwnAudioSource): Promise<string | null> {
@@ -135,10 +157,15 @@ async function hasPipeWireTools(): Promise<boolean> {
 
 function startLinking(own: OwnAudioSource, defaultSink: string): void {
   let busy = false;
+  // Pedido feito durante uma sincronização: roda de novo ao fim dela.
+  let again = false;
   let sinkChecks = DEFAULT_SINK_CHECKS;
   const failures = new Map<string, number>();
-  const tick = async () => {
-    if (busy) return;
+  const tick = async (): Promise<void> => {
+    if (busy) {
+      again = true;
+      return;
+    }
     busy = true;
     try {
       // O sink de captura não pode virar a saída padrão do usuário.
@@ -151,14 +178,21 @@ function startLinking(own: OwnAudioSource, defaultSink: string): void {
     } finally {
       busy = false;
     }
+    if (again && linkTimer === timer) {
+      again = false;
+      await tick();
+    }
   };
+  const timer = setInterval(tick, LINK_INTERVAL_MS);
+  linkTimer = timer;
   void tick();
-  linkTimer = setInterval(tick, LINK_INTERVAL_MS);
+  syncNow = () => void tick();
 }
 
 function stopLinking(): void {
   if (linkTimer) clearInterval(linkTimer);
   linkTimer = null;
+  syncNow = null;
 }
 
 interface PwObject {
@@ -194,15 +228,52 @@ function targetChannels(channel: unknown): string[] {
   }
 }
 
+type Props = Record<string, unknown>;
+
+function isOwnStream(props: Props, own: OwnAudio): boolean {
+  return (
+    own.pids.has(Number(props["application.process.id"])) ||
+    String(props["application.name"] ?? "").toLowerCase() === own.appName.toLowerCase()
+  );
+}
+
+// Identidade estável de um app entre streams e execuções: o binário (ex.: "chromium"),
+// senão o nome. O rótulo é o nome que o próprio app publica.
+export function audioAppOf(props: Props): AudioApp | null {
+  const name = String(props["application.name"] ?? props["node.name"] ?? "").trim();
+  const id = String(props["application.process.binary"] ?? name).trim().toLowerCase();
+  return id ? { id, name: name || id } : null;
+}
+
+function isPlayback(o: PwObject): boolean {
+  return o.type === "PipeWire:Interface:Node" && o.info?.props?.["media.class"] === "Stream/Output/Audio";
+}
+
+export function audioApps(objects: PwObject[], own: OwnAudio): AudioApp[] {
+  const apps = new Map<string, AudioApp>();
+  for (const o of objects) {
+    const props = o.info?.props ?? {};
+    if (!isPlayback(o) || isOwnStream(props, own)) continue;
+    const app = audioAppOf(props);
+    if (app && !apps.has(app.id)) apps.set(app.id, app);
+  }
+  return [...apps.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
 export interface LinkPlan {
   add: [number, number][];
-  // Links do próprio app para o sink (ex.: criados antes de um PID novo ser conhecido).
+  // Links do próprio app ou de apps bloqueados para o sink (ex.: criados antes de um
+  // PID novo ser conhecido, ou antes de o usuário bloquear o app).
   remove: [number, number][];
 }
 
 // Liga a saída de cada stream de reprodução de outros apps ao sink de captura e
-// desfaz qualquer link que leve o áudio do próprio app para lá.
-export function planLinks(objects: PwObject[], own: OwnAudio): LinkPlan {
+// desfaz qualquer link que leve o áudio do próprio app ou de um app bloqueado para lá.
+export function planLinks(
+  objects: PwObject[],
+  own: OwnAudio,
+  blockedApps: ReadonlySet<string> = new Set(),
+): LinkPlan {
   const props = (o: PwObject) => o.info?.props ?? {};
   const plan: LinkPlan = { add: [], remove: [] };
   const sink = objects.find(
@@ -210,15 +281,11 @@ export function planLinks(objects: PwObject[], own: OwnAudio): LinkPlan {
   );
   if (!sink) return plan;
 
-  const appName = own.appName.toLowerCase();
-  const isOwn = (o: PwObject) =>
-    own.pids.has(Number(props(o)["application.process.id"])) ||
-    String(props(o)["application.name"] ?? "").toLowerCase() === appName;
-  const playback = objects.filter(
-    (o) => o.type === "PipeWire:Interface:Node" && props(o)["media.class"] === "Stream/Output/Audio",
-  );
-  const foreign = new Set(playback.filter((o) => !isOwn(o)).map((o) => o.id));
-  const mine = new Set(playback.filter(isOwn).map((o) => o.id));
+  const excluded = (o: PwObject) =>
+    isOwnStream(props(o), own) || blockedApps.has(audioAppOf(props(o))?.id ?? "");
+  const playback = objects.filter(isPlayback);
+  const foreign = new Set(playback.filter((o) => !excluded(o)).map((o) => o.id));
+  const mine = new Set(playback.filter(excluded).map((o) => o.id));
 
   const ports = objects.filter((o) => o.type === "PipeWire:Interface:Port");
   const nodeOf = new Map(ports.map((p) => [p.id, Number(props(p)["node.id"])]));
@@ -245,7 +312,7 @@ export function planLinks(objects: PwObject[], own: OwnAudio): LinkPlan {
 async function syncLinks(own: OwnAudioSource, failures: Map<string, number>): Promise<void> {
   const { stdout } = await run("pw-dump", [], { maxBuffer: 64 * 1024 * 1024 });
   // PIDs lidos depois do dump: um stream novo do próprio app já aparece nos dois.
-  const plan = planLinks(JSON.parse(stdout) as PwObject[], own());
+  const plan = planLinks(JSON.parse(stdout) as PwObject[], own(), blocked);
   for (const [output, input] of plan.remove) {
     await run("pw-link", ["-d", String(output), String(input)]).catch(() => undefined);
   }
