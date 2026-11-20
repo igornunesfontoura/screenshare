@@ -1,4 +1,4 @@
-﻿# Diagnóstico do áudio por app do ScreenShare no Windows.
+# Diagnóstico do áudio por app do ScreenShare no Windows.
 # Uso (PowerShell, uma linha):
 #   irm https://raw.githubusercontent.com/igornunesfontoura/screenshare/main/scripts/diagnose-win-audio.ps1 | iex
 # Ou dois cliques em scripts/diagnose-win-audio.cmd.
