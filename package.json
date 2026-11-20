@@ -1,7 +1,7 @@
 {
   "name": "screenshare",
   "private": true,
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Compartilhamento de tela P2P e watch party para Linux e Windows",
   "author": "Igor Nunes <igoralunomc@gmail.com>",
   "type": "module",
